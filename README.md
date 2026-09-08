@@ -2,13 +2,14 @@
 
 面向多项目、多开发人员、多 Coding Agent 的研发感知与协同管理平台。
 
-当前已进入 **Phase 1：本地项目感知 + 项目资料增量分析**。
+当前已完成 **Phase 1 核心闭环**，并进入 **Phase 2：GitLab/GitHub 远端证据融合**。
 
 核心目标：
 - 本地 Project Sentinel 感知 Git 尚未提交的真实开发现场；
-- 中央统一融合 GitHub/GitLab、测试、Agent 与项目资料证据；
-- 以 `project.yaml` 作为项目机器可读身份与扫描规范；
-- 事实由程序采集，AI 只负责摘要与解释，不凭空估算项目进度；
+- 一个业务项目可以同时关联多个代码仓库，例如“低电压”同时包含前端和算法仓库；
+- 中央统一采集 GitLab/GitHub 的 Commit、MR/PR、CI/Pipeline、Deployment 事实；
+- 融合项目资料、多人本地工作区、测试、Agent 与远端 DevOps 证据；
+- 只有证据闭环后才判断任务状态，AI 不凭聊天或代码量猜项目进度；
 - 默认不上传源码与项目文档全文，只上传结构化状态与必要摘要。
 
 ## 当前代码
@@ -16,55 +17,148 @@
 ```text
 apps/
 ├── local-sentinel/
-│   ├── sentinel.py             # 本地项目/Git 感知
+│   ├── sentinel.py             # 本地项目/多 Git repo 感知
+│   ├── multi_repository.py     # 一个项目多个本地仓库聚合
 │   ├── document_pipeline.py    # 项目资料增量解析与 Project Memory
+│   ├── git_change_analysis.py  # 本地未提交代码变化语义分析
 │   └── tests/
-└── server/                     # 中央接收 API（MVP 使用 SQLite）
+├── remote-collector/
+│   ├── gitlab_collector.py     # 中央 GitLab Commit/MR/CI/Deployment 采集
+│   └── tests/
+└── server/
+    ├── main.py                 # 中央 API（MVP 使用 SQLite）
+    ├── project_evidence.py     # 多人/多工作区本地证据融合
+    ├── remote_evidence.py      # GitLab/GitHub 远端证据融合
+    └── tests/
 
-deployments/
-├── local/
-└── central/
-
+config/gitlab-projects.yaml      # 当前真实 GitLab 项目/仓库登记
+deployments/local/
+deployments/central/
 docs/
-├── architecture.md
-├── project-spec.md
-├── event-model.md
-├── security.md
-└── document-intelligence.md
-
-examples/project.yaml
+examples/
 schemas/project.schema.json
 ```
 
-## 当前链路
+## 已登记的真实 GitLab 仓库
+
+当前 `config/gitlab-projects.yaml` 已登记：
 
 ```text
-开发者项目目录
-  ↓ 只读挂载
-Project Sentinel
-  ├─ Git 状态 / 文件元数据
-  └─ local_analysis 模式下：项目资料增量解析
-           ↓
-      本地 SQLite hash 缓存
-           ↓
-      Word / Excel / 文本解析
-           ↓
-      文档角色 + 结构化事实
-           ↓
-        Project Memory
-  ↓
-Central API
-  ↓
-SQLite（MVP）
-  ↓
-项目列表 / 项目快照 API
+低电压项目
+├── frontend
+│   http://git.hyetec.com/hyetec/rj26nw011/Front-end/voltage-management.git
+└── algorithm
+    http://git.hyetec.com/hyetec/rj26nw011/algorithm.git
+
+电力设备缺陷处置
+└── http://git.hyetec.com/hyetec/rj26nw025/multimodal-agent.git
+
+HyClaw Plugins
+└── http://git.hyetec.com/hyetec/rrj26rj001/hyclaw/plugins/hyclaw-plugins.git
 ```
+
+GitLab Token 不写入仓库配置，只通过中央 Collector 环境变量提供。
+
+## 当前完整链路
+
+```text
+开发人员电脑
+┌──────────────────────────────────────────────┐
+│ Project Sentinel                             │
+│                                              │
+│ 项目资料 → 增量解析 → Project Memory          │
+│ repo A  ─┐                                   │
+│ repo B  ─┼→ Git状态 + 本地diff语义分析         │
+│ repo C  ─┘                                   │
+│ Codex/TRAE/Hermes → Agent Event（后续MCP）    │
+└──────────────────┬───────────────────────────┘
+                   │ Local Snapshot
+                   ▼
+              Central API
+                   ▲
+                   │ Remote Event
+┌──────────────────┴───────────────────────────┐
+│ Central GitLab Collector                     │
+│ Commit / MR / Pipeline / Deployment          │
+└──────────────────┬───────────────────────────┘
+                   │
+               GitLab/GitHub
+
+中央：
+Local Evidence + Remote Evidence
+              ↓
+        Evidence Fusion
+              ↓
+待开发 / 开发中 / 尚未提交 / 已提交远端 /
+MR审核中 / CI通过待合并 / 已合并待部署 / 正式完成
+```
+
+## “正式完成”的判断
+
+Agent 说“完成”不能直接把任务改成完成。
+
+当前状态链：
+
+```text
+本地修改
+  ↓
+本地测试通过
+  ↓
+本地验证通过，待远端复核
+  ↓ GitLab Commit/Push
+已提交远端
+  ↓ MR/PR
+审核中
+  ↓ CI/Pipeline
+CI通过，待合并
+  ↓ Merge
+已合并，待部署确认
+  ↓ Deployment success
+正式完成
+```
+
+如果 CI 或部署失败，优先进入“需要关注”。
+
+## 项目目录与多仓库
+
+每个受管项目目录只需要有一个 `project.yaml`。目录可以同时放项目资料和多个 Git clone：
+
+```text
+company-projects/
+└── low-voltage/
+    ├── project.yaml
+    ├── algorithm-ryj/          # algorithm.git
+    ├── voltage-management/     # Front-end/voltage-management.git
+    ├── 需求拆解.xlsx
+    ├── 测试结果.xlsx
+    └── 问题反馈.xlsx
+```
+
+`project.yaml` 使用：
+
+```yaml
+repositories:
+  - id: low-voltage-algorithm
+    role: algorithm
+    provider: gitlab
+    url: http://git.hyetec.com/hyetec/rj26nw011/algorithm.git
+    local_path: algorithm-ryj
+    primary: true
+
+  - id: low-voltage-frontend
+    role: frontend
+    provider: gitlab
+    url: http://git.hyetec.com/hyetec/rj26nw011/Front-end/voltage-management.git
+    local_path: voltage-management
+```
+
+旧版单 `repository:` 写法仍兼容。
 
 ## 项目资料分析
 
 默认 `security.mode: metadata_only`，不会读取项目文件正文。
 
-需要启用本机资料分析时，在项目 `project.yaml` 中设置：
+启用本机资料分析：
 
 ```yaml
 security:
@@ -79,34 +173,11 @@ analysis:
   use_llm: false
 ```
 
-第一版支持 `.md/.txt/.json/.yaml`、常见源码文本、`.docx`、`.xlsx`。只有新增或 hash 发生变化的文件重新分析；结果缓存在 Sentinel 自己的 `/state` Docker volume，不写入项目目录。
+支持文本/Markdown/JSON/YAML、DOCX、XLSX、CSV、文本型 PDF；只有新增或 hash 变化的文件重新分析。源码正文默认不上送中央。
 
-如需使用本机 OpenAI-compatible 模型：
+## 快速启动
 
-```bash
-export LOCAL_LLM_BASE_URL='http://host.docker.internal:11434/v1'
-export LOCAL_LLM_MODEL='qwen3:8b'
-```
-
-并把 `analysis.use_llm` 改为 `true`。默认禁止把正文发送到非本机分析地址。
-
-详细规则见 `docs/document-intelligence.md`。
-
-## 快速验证
-
-### 1. 为本地项目增加 `project.yaml`
-
-参考：`examples/project.yaml`。
-
-假设所有受管项目位于：
-
-```text
-/Users/you/company-projects/
-├── project-a/project.yaml
-└── project-b/project.yaml
-```
-
-### 2. 启动中央 API
+### 1. 中央 API
 
 ```bash
 export COLLECTOR_TOKEN='replace-with-a-random-token'
@@ -114,7 +185,7 @@ docker compose -f deployments/central/docker-compose.yml up --build -d
 curl http://localhost:8080/health
 ```
 
-### 3. 启动本地 Sentinel
+### 2. 开发人员本地 Sentinel
 
 ```bash
 export PROJECTS_PATH='/Users/you/company-projects'
@@ -126,30 +197,57 @@ export DEVICE_ID='your-device'
 docker compose -f deployments/local/docker-compose.yml up --build -d
 ```
 
-### 4. 查看采集结果
+### 3. 中央启用 GitLab Collector
+
+必须在能访问 `git.hyetec.com` 的公司网络/VPN环境运行：
+
+```bash
+export COLLECTOR_TOKEN='replace-with-a-random-token'
+export GITLAB_BASE_URL='http://git.hyetec.com'
+export GITLAB_TOKEN='your-read-api-token'
+
+docker compose \
+  -f deployments/central/docker-compose.yml \
+  --profile gitlab \
+  up --build -d
+```
+
+Collector 默认每 5 分钟统一查询已登记仓库。开发人员电脑不重复轮询 GitLab。
+
+### 4. 查看结果
 
 ```bash
 curl http://localhost:8080/api/v1/projects
-curl http://localhost:8080/api/v1/projects/<project_id>/snapshots
+curl http://localhost:8080/api/v1/projects/low-voltage/workspaces
+curl http://localhost:8080/api/v1/projects/low-voltage/tasks
+curl http://localhost:8080/api/v1/projects/low-voltage/remote-events
+curl http://localhost:8080/api/v1/projects/low-voltage/evidence
 ```
 
-返回的 `payload.analysis` 中可以看到文档角色、增量分析统计、结构化 facts 与当前 Project Memory。
+## 安全边界
 
-## 本轮验证
+- 项目目录默认 Docker `:ro` 只读挂载；
+- `.env`、证书、私钥等敏感文件不读取正文；
+- GitLab Token 只存在中央 Collector 环境变量/Secret Store；
+- 本地 diff 只在本机分析，中央收到结构化摘要而不是 patch；
+- `metadata_only` 模式完全不读业务文档正文。
 
-已在本地完成：
-- Python 语法编译检查；
-- 增量文本分析单元测试：首次分析、第二次命中缓存；
-- `.docx` 段落解析 smoke test；
-- `.xlsx` 只读抽样解析 smoke test。
+## CI
 
-尚未在真实 Docker Desktop + 真实项目目录上完成端到端验证。
+`cao` 分支 CI 当前覆盖：
+- Python compile；
+- Document Intelligence；
+- nested/multi-repository Git inspection；
+- cross-workspace Evidence Fusion；
+- remote evidence lifecycle；
+- GitLab event normalization；
+- Local Sentinel / Central Server / GitLab Collector 三个 Docker 镜像构建。
 
 ## 下一步
 
-1. 加入 watchdog 文件事件，进一步减少周期扫描与重复 hash；
-2. 针对 Git changed files 做代码变化语义分析，而不是全量源码扫描；
-3. 将中央 SQLite MVP 升级为 PostgreSQL + 统一 `DevEvent` 表；
-4. 做项目总览、Project Memory 和时间线 Web 页；
-5. 接入 Apache DevLake，同步 GitHub/GitLab/PR/MR/CI 远端事实；
-6. 增加 MCP Server，让 Codex/TRAE/Hermes 结构化上报任务、测试和阻塞。
+1. 用公司网络实测 `git.hyetec.com` API 权限与四个真实仓库采集；
+2. 增加 GitLab 分页、Webhook 与 DevLake adapter，定时轮询作为兜底；
+3. 增加 MCP Server，让 Codex/TRAE/Hermes 自动上报 task.started/progress/finished/test/blocker；
+4. 建项目总览、任务证据链、人员/Agent、时间线 Web 页面；
+5. SQLite MVP 升级 PostgreSQL + 统一 DevEvent 表；
+6. 生成日报、周报、风险与跨项目管理驾驶舱。
