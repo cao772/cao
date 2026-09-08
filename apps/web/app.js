@@ -1,8 +1,4 @@
-const state = {
-  projects: [],
-  selectedProjectId: null,
-  detail: null,
-};
+const state = { projects: [], selectedProjectId: null, detail: null };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -70,7 +66,6 @@ function renderProjectList() {
         <span class="meta"><span>${escapeHtml(stateLabel)}</span><span>${project.contributor_count || 0} 人</span></span>
       </button>`;
   }).join('');
-
   els.projectList.querySelectorAll('[data-project-id]').forEach(button => {
     button.addEventListener('click', () => selectProject(button.dataset.projectId));
   });
@@ -91,7 +86,6 @@ function renderOverview(project, detail) {
   const summary = fusion.summary || {};
   const rollup = current.project_rollup || {};
   const stateLabel = fusion.project_state_label || project.project_state_label || '暂无活动';
-
   els.overview.innerHTML = [
     metric('项目状态', stateLabel, fusion.formal_completion_supported ? '已启用远端证据闭环' : '当前以本地证据为主', true),
     metric('开发人员', rollup.contributor_count ?? project.contributor_count ?? 0, `${rollup.workspace_count ?? project.workspace_count ?? 0} 个工作区`),
@@ -106,12 +100,10 @@ function renderTasks(detail) {
   const items = tasks.work_items || [];
   els.taskScope.textContent = tasks.formal_completion_supported ? '证据闭环' : '本地证据';
   els.taskScope.className = `badge ${tasks.formal_completion_supported ? 'good' : 'warn'}`;
-
   if (!items.length) {
     els.taskTable.innerHTML = '<div class="empty">尚未形成可关联的任务事项。Agent 可通过 MCP report_task_started 上报明确任务。</div>';
     return;
   }
-
   els.taskTable.innerHTML = `
     <table>
       <thead><tr><th>任务</th><th>当前状态</th><th>参与人员</th><th>证据说明</th></tr></thead>
@@ -148,15 +140,14 @@ function renderMemory(detail) {
 }
 
 function renderContributors(detail) {
-  const data = detail.contributors || {};
-  const contributors = data.contributors || [];
+  const contributors = detail.contributors?.contributors || [];
   if (!contributors.length) {
     els.contributors.innerHTML = '<div class="empty">暂无开发人员数据</div>';
     return;
   }
   els.contributors.innerHTML = contributors.map(item => {
     const agents = (item.agents || []).map(agent => typeof agent === 'string' ? agent : (agent.name || agent.agent_name)).filter(Boolean);
-    const branches = Object.keys(item.branches || {});
+    const branches = Array.isArray(item.branches) ? item.branches : Object.keys(item.branches || {});
     return `
       <div class="contributor">
         <div class="contributor-head"><span>${escapeHtml(item.user_id || item.name || '未知用户')}</span><span>${item.workspace_count || 0} 工作区</span></div>
