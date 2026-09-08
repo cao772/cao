@@ -18,7 +18,7 @@ def test_workspace_inventory_flags_copies_archives_and_pending_parsers():
     assert result["file_count"] == len(files)
     assert result["suffix_counts"][".xlsx"] == 1
     assert {item["suffix"] for item in result["pending_parsers"]} == {".doc"}
-    assert result["content_parser_ready_count"] == 5
+    assert result["content_parser_ready_count"] == 6
     assert result["packaged_duplicates"] == [
         {"archive": "alignment_handoff_pack.zip", "folder": "alignment_handoff_pack"}
     ]
