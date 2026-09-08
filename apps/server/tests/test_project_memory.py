@@ -41,3 +41,22 @@ def test_absolute_date_hint_wins_over_month_day_hint():
     assert absolute["date_precision"] == "day"
     assert short["date_value"] == 904
     assert short["date_precision"] == "month_day"
+
+
+def test_low_voltage_real_world_date_patterns():
+    assert infer_temporal_hints("6_4 上线版本测试表.xlsx")["date_value"] == 604
+    assert infer_temporal_hints("6.18 工作任务对应测试表.xlsx")["date_value"] == 618
+    assert infer_temporal_hints("6.22-6.26 任务测试.xlsx")["date_value"] == 626
+    assert infer_temporal_hints("6.30-7.9 开发任务.xlsx")["date_value"] == 709
+    assert infer_temporal_hints("629-7.9 任务测试.xlsx")["date_value"] == 709
+    assert infer_temporal_hints("一般低电压台区通过项目明细表 2026_6_17.xlsx")["date_value"] == 20260617
+
+
+def test_low_voltage_task_series_group_across_dates():
+    assert series_key("6.22-6.26 任务测试.xlsx") == series_key("629-7.9 任务测试.xlsx")
+
+
+def test_copy_marker_does_not_create_separate_series():
+    current = "低电压项目 8.12问题反馈表.xlsx"
+    copy = "副本低电压项目 8.12问题反馈表(5).xlsx"
+    assert series_key(current) == series_key(copy)
