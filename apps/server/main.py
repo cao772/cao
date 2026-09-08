@@ -16,7 +16,7 @@ from workspace_inventory import build_workspace_inventory
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.4.0")
+app = FastAPI(title="AI Dev Management API", version="0.5.0")
 
 
 class SnapshotIn(BaseModel):
@@ -33,6 +33,7 @@ class SnapshotIn(BaseModel):
     git: dict[str, Any]
     files: dict[str, Any] = Field(default_factory=dict)
     analysis: dict[str, Any] = Field(default_factory=dict)
+    git_change_analysis: dict[str, Any] = Field(default_factory=dict)
 
 
 def now_utc() -> str:
@@ -92,7 +93,7 @@ def require_collector_token(x_collector_token: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.4.0"}
+    return {"status": "ok", "version": "0.5.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -211,6 +212,7 @@ def get_current_project(project_id: str) -> dict[str, Any]:
     payload = json.loads(item.pop("payload_json"))
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
     item["git"] = payload.get("git") or {}
+    item["git_change_analysis"] = payload.get("git_change_analysis") or {}
     item["analysis_stats"] = (payload.get("analysis") or {}).get("stats") or {}
     item["workspace_inventory"] = payload.get("workspace_inventory") or {}
     item["current_project_memory"] = memory
