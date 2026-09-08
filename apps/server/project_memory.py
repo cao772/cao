@@ -6,8 +6,15 @@ from pathlib import PurePosixPath
 from typing import Any
 
 
-DATE_8 = re.compile(r"(?<!\d)(20\d{2})[-_.年]?(0[1-9]|1[0-2])[-_.月]?(0[1-9]|[12]\d|3[01])(?:日)?(?!\d)")
-DATE_4 = re.compile(r"(?<!\d)(0[1-9]|1[0-2])([0-2]\d|3[01])(?!\d)")
+FULL_DATE = re.compile(
+    r"(?<!\d)(20\d{2})[._/\-年]?(1[0-2]|0?[1-9])[._/\-月]?(3[01]|[12]\d|0?[1-9])(?:日)?(?!\d)"
+)
+MD_SEPARATED = re.compile(
+    r"(?<!\d)(1[0-2]|0?[1-9])[._/\-](3[01]|[12]\d|0?[1-9])(?!\d)"
+)
+MD_COMPACT = re.compile(
+    r"(?<!\d)(1[0-2]|0?[1-9])([0-3]\d)(?!\d)"
+)
 VERSION = re.compile(r"(?i)(?:^|[^a-z0-9])v(\d+)(?:[._-](\d+))?")
 ISSUE = re.compile(r"第\s*(\d+)\s*期")
 COPY_MARKERS = re.compile(r"(?:副本|copy|备份|backup|归档|archive|historical|history)", re.IGNORECASE)
@@ -24,7 +31,7 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
     date_precision: str | None = None
     date_text: str | None = None
 
-    absolute = list(DATE_8.finditer(name))
+    absolute = list(FULL_DATE.finditer(name))
     if absolute:
         match = absolute[-1]
         year, month, day = map(int, match.groups())
@@ -32,13 +39,19 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
         date_precision = "day"
         date_text = f"{year:04d}-{month:02d}-{day:02d}"
     else:
-        short_dates = list(DATE_4.finditer(name))
-        if short_dates:
-            match = short_dates[-1]
+        # Real project folders commonly use 6_4, 6.18, 6.22-6.26, 7.2 or 629.
+        # For ranges we intentionally choose the last date as the freshness hint.
+        candidates: list[tuple[int, int, str]] = []
+        for match in MD_SEPARATED.finditer(name):
             month, day = map(int, match.groups())
-            date_value = month * 100 + day
+            candidates.append((match.start(), month * 100 + day, f"{month:02d}-{day:02d}"))
+        for match in MD_COMPACT.finditer(name):
+            month, day = map(int, match.groups())
+            if 1 <= month <= 12 and 1 <= day <= 31:
+                candidates.append((match.start(), month * 100 + day, f"{month:02d}-{day:02d}"))
+        if candidates:
+            _, date_value, date_text = sorted(candidates, key=lambda item: item[0])[-1]
             date_precision = "month_day"
-            date_text = f"{month:02d}-{day:02d}"
 
     version_matches = list(VERSION.finditer(name))
     version: tuple[int, int] | None = None
@@ -62,16 +75,18 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
 def series_key(path: str) -> str:
     """Collapse obvious filename versions into one document series.
 
-    This is deliberately conservative: it keeps the full parent path so files in
-    unrelated directories do not become one series merely because their names match.
+    The parent path remains part of the key so unrelated directories do not merge.
+    Dates/ranges, V versions, issue numbers and obvious copy markers are stripped.
     """
     clean = _clean_path(path)
     pure = PurePosixPath(clean)
     stem = pure.stem.lower()
-    stem = DATE_8.sub("", stem)
-    stem = DATE_4.sub("", stem)
+    stem = FULL_DATE.sub("", stem)
+    stem = MD_SEPARATED.sub("", stem)
+    stem = MD_COMPACT.sub("", stem)
     stem = VERSION.sub(" ", stem)
     stem = ISSUE.sub("", stem)
+    stem = COPY_MARKERS.sub("", stem)
     stem = re.sub(r"\((?:\d+|副本|copy)\)", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"(?:[_\-\s]+)(?:final|最终|最新版|最新)$", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"[_\-.\s（）()]+", " ", stem).strip()
@@ -232,6 +247,11 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
     if not current_items and analysis.get("enabled"):
         warnings.append("资料分析已启用，但没有可用于当前视图的已解析文件。")
 
+    local_memory = analysis.get("project_memory") or {}
+    diagnostics = list(local_memory.get("diagnostics") or [])
+    if diagnostics:
+        warnings.append(f"有 {len(diagnostics)} 个文件未进入正文事实提取，详见 diagnostics。")
+
     return {
         "current_source_count": len(current_items),
         "historical_source_count": len(historical_items),
@@ -247,6 +267,7 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
         "requirements": buckets.get("requirement", [])[:80],
         "decisions": buckets.get("decision", [])[:80],
         "milestones": buckets.get("milestone", [])[:80],
+        "diagnostics": diagnostics[:200],
         "warnings": warnings,
     }
 
