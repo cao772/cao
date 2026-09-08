@@ -12,13 +12,11 @@ CONTENT_SUPPORTED = {
     ".md", ".txt", ".rst", ".json", ".yaml", ".yml",
     ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go",
     ".rs", ".c", ".h", ".cpp", ".hpp", ".sh", ".sql",
-    ".docx", ".xlsx",
+    ".docx", ".xlsx", ".csv", ".pdf",
 }
 LEGACY_OR_PENDING = {
     ".doc": "旧版 Word，当前正文解析器未直接支持",
-    ".pdf": "PDF 当前只做文件元数据，正文解析待接入",
     ".pptx": "PPTX 当前只做文件元数据，正文解析待接入",
-    ".csv": "CSV 当前只做文件元数据，正文解析待接入",
 }
 
 
