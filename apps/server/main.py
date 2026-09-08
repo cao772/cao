@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from evidence_fusion import fuse_evidence
+from project_evidence import fuse_project_evidence
 from project_memory import enrich_snapshot_payload
 from project_rollup import build_project_rollup
 from workspace_inventory import build_workspace_inventory
@@ -19,7 +19,7 @@ from workspace_inventory import build_workspace_inventory
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.7.0")
+app = FastAPI(title="AI Dev Management API", version="0.8.0")
 
 
 class SnapshotIn(BaseModel):
@@ -212,9 +212,17 @@ def project_rollup(project_id: str) -> dict[str, Any]:
     return build_project_rollup(snapshots, events)
 
 
+def project_evidence(project_id: str) -> dict[str, Any]:
+    snapshots = latest_workspace_snapshots(project_id)
+    if not snapshots:
+        raise HTTPException(status_code=404, detail="project snapshot not found")
+    events = recent_agent_events(project_id, 500)
+    return fuse_project_evidence(snapshots, events)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.7.0"}
+    return {"status": "ok", "version": "0.8.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -409,26 +417,31 @@ def list_project_agent_events(
 
 @app.get("/api/v1/projects/{project_id}/evidence")
 def get_project_evidence(project_id: str) -> dict[str, Any]:
-    primary, payload = latest_snapshot(project_id)
-    events = recent_agent_events(project_id, 300)
-    fusion = fuse_evidence(payload, events)
-    fusion["primary_workspace"] = {
-        "user_id": primary.get("user_id"),
-        "device_id": primary.get("device_id"),
-        "workspace_name": primary.get("workspace_name"),
-        "snapshot_id": primary.get("id"),
-    }
+    fusion = project_evidence(project_id)
     fusion["project_rollup"] = project_rollup(project_id)
     fusion["scope_note"] = (
-        "任务级 Evidence Fusion 当前以最新工作区的项目资料/Git证据为主；"
-        "project_rollup 已汇总所有开发人员最新工作区，后续将继续做跨工作区任务级融合。"
+        "任务级证据已融合该项目所有开发人员的最新本地工作区；"
+        "当前仍只覆盖本地资料、Git、测试和Agent事件，尚未纳入PR/MR、CI、Merge和部署事实。"
     )
     return fusion
 
 
+@app.get("/api/v1/projects/{project_id}/tasks")
+def list_project_tasks(project_id: str) -> dict[str, Any]:
+    fusion = project_evidence(project_id)
+    return {
+        "project_id": project_id,
+        "scope": fusion.get("scope"),
+        "summary": fusion.get("summary") or {},
+        "formal_completion_supported": fusion.get("formal_completion_supported", False),
+        "work_items": fusion.get("work_items") or [],
+        "unlinked_evidence": fusion.get("unlinked_evidence") or {},
+    }
+
+
 @app.get("/api/v1/projects/{project_id}/current")
 def get_current_project(project_id: str) -> dict[str, Any]:
-    """Return project-level rollup plus the latest workspace's detailed evidence."""
+    """Return project-level rollup, cross-workspace task evidence and latest workspace details."""
     item, payload = latest_snapshot(project_id)
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
     events = recent_agent_events(project_id, 300)
@@ -439,9 +452,10 @@ def get_current_project(project_id: str) -> dict[str, Any]:
     item["workspace_inventory"] = payload.get("workspace_inventory") or {}
     item["current_project_memory"] = memory
     item["agent_events"] = events[-100:]
-    item["evidence_fusion"] = fuse_evidence(payload, events)
+    item["evidence_fusion"] = project_evidence(project_id)
     item["project_rollup"] = project_rollup(project_id)
     item["evidence_scope_note"] = (
-        "当前任务级证据融合仍以最新工作区为锚点；多人工作区状态已在 project_rollup 中完整保留。"
+        "evidence_fusion 已按任务融合所有开发人员最新工作区；"
+        "当前页面上的 git/current_project_memory 仍表示最近一次上传的工作区详情。"
     )
     return item
