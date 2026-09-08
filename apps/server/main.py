@@ -10,10 +10,12 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from project_memory import enrich_snapshot_payload
+
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.2.0")
+app = FastAPI(title="AI Dev Management API", version="0.3.0")
 
 
 class SnapshotIn(BaseModel):
@@ -89,7 +91,7 @@ def require_collector_token(x_collector_token: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok", "version": "0.3.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -99,7 +101,7 @@ def ingest_snapshot(
 ) -> dict[str, Any]:
     require_collector_token(x_collector_token)
     received_at = now_utc()
-    payload = snapshot.model_dump()
+    payload = enrich_snapshot_payload(snapshot.model_dump())
 
     with get_db() as conn:
         cursor = conn.execute(
@@ -180,3 +182,31 @@ def list_project_snapshots(
         item["payload"] = json.loads(item.pop("payload_json"))
         result.append(item)
     return result
+
+
+@app.get("/api/v1/projects/{project_id}/current")
+def get_current_project(project_id: str) -> dict[str, Any]:
+    """Return the latest local workspace snapshot plus its fused current-view memory."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, project_id, project_name, user_id, device_id, workspace_name,
+                   observed_at, received_at, snapshot_type, payload_json
+            FROM snapshots
+            WHERE project_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="project snapshot not found")
+
+    item = dict(row)
+    payload = json.loads(item.pop("payload_json"))
+    memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
+    item["git"] = payload.get("git") or {}
+    item["analysis_stats"] = (payload.get("analysis") or {}).get("stats") or {}
+    item["current_project_memory"] = memory
+    return item
