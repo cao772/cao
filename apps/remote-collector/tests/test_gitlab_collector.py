@@ -1,8 +1,11 @@
+import gitlab_collector
 from gitlab_collector import (
+    gitlab_get_all,
     normalize_commit,
     normalize_deployment,
     normalize_merge_request,
     normalize_pipeline,
+    normalize_push_event,
 )
 
 
@@ -29,6 +32,31 @@ def test_commit_extracts_task_id():
     assert event["event_type"] == "git.commit"
     assert event["task_id"] == "LV-102"
     assert event["repository_id"] == "low-voltage-algorithm"
+
+
+def test_push_event_captures_feature_branch_and_task_id():
+    event = normalize_push_event(
+        PROJECT,
+        REPO,
+        {
+            "id": 81,
+            "created_at": "2026-09-08T10:05:00+00:00",
+            "author_username": "dev1",
+            "push_data": {
+                "commit_title": "LV-102 修复工程量提取",
+                "ref": "LV-102-fix-quantity",
+                "ref_type": "branch",
+                "commit_from": "aaa",
+                "commit_to": "bbb",
+                "commit_count": 2,
+            },
+        },
+    )
+    assert event["event_type"] == "git.push"
+    assert event["task_id"] == "LV-102"
+    assert event["branch"] == "LV-102-fix-quantity"
+    assert event["commit_sha"] == "bbb"
+    assert event["data"]["author"] == "dev1"
 
 
 def test_merge_request_merged_is_normalized():
@@ -83,3 +111,21 @@ def test_deployment_success_is_normalized():
     assert event["event_type"] == "deployment.succeeded"
     assert event["data"]["environment"] == "test"
     assert event["commit_sha"] == "abc123"
+
+
+def test_gitlab_get_all_paginates_until_short_page(monkeypatch):
+    calls = []
+
+    def fake_get(path, params):
+        calls.append((path, dict(params)))
+        page = params["page"]
+        if page == 1:
+            return [{"id": index} for index in range(100)]
+        if page == 2:
+            return [{"id": 100}, {"id": 101}]
+        raise AssertionError("should stop after short page")
+
+    monkeypatch.setattr(gitlab_collector, "gitlab_get", fake_get)
+    rows = gitlab_get_all("projects/1/events", {"per_page": 100})
+    assert len(rows) == 102
+    assert [item[1]["page"] for item in calls] == [1, 2]
