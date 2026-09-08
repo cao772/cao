@@ -21,7 +21,9 @@ services:
       dockerfile: apps/remote-collector/Dockerfile
     environment:
       GITLAB_BASE_URL: ${GITLAB_BASE_URL:-http://git.hyetec.com}
-      GITLAB_TOKEN: ${GITLAB_TOKEN:?set GITLAB_TOKEN when enabling gitlab profile}
+      # Keep this optional at Compose interpolation time so the base server can run
+      # without the gitlab profile. The collector itself fails fast if enabled empty.
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
       CENTRAL_URL: http://server:8080
       COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:?set COLLECTOR_TOKEN}
       POLL_INTERVAL_SECONDS: ${GITLAB_POLL_INTERVAL_SECONDS:-300}
