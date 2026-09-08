@@ -79,6 +79,9 @@ analysis:
   max_items: 500
   xlsx_rows_per_sheet: 200
   xlsx_columns: 30
+  csv_rows: 500
+  csv_columns: 50
+  pdf_pages: 50
 
 progress:
   sources:
