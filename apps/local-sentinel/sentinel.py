@@ -16,6 +16,7 @@ import yaml
 
 from document_pipeline import analyze_project_files, is_ignored, is_sensitive_path
 from git_change_analysis import analyze_git_changes
+from multi_repository import inspect_repositories
 
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
 STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
@@ -24,7 +25,7 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "900"))
 USER_ID = os.getenv("USER_ID", os.getenv("USER", "unknown"))
 DEVICE_ID = os.getenv("DEVICE_ID", socket.gethostname())
-SENTINEL_VERSION = "0.4.0"
+SENTINEL_VERSION = "0.5.0"
 
 
 def utc_now() -> str:
@@ -32,6 +33,7 @@ def utc_now() -> str:
 
 
 def run_git(repo: Path, *args: str) -> tuple[int, str]:
+    """Legacy helper kept for compatibility with existing callers/tests."""
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -46,12 +48,10 @@ def run_git(repo: Path, *args: str) -> tuple[int, str]:
 
 
 def resolve_git_root(project_root: Path, manifest: dict[str, Any]) -> tuple[Path | None, str]:
-    """Resolve the canonical repository path declared by project.yaml.
+    """Resolve the legacy single canonical repository declared by project.yaml.
 
-    Many real project folders are management workspaces, not Git repositories themselves.
-    `repository.local_path` lets the project root contain documents, historical copies and
-    handoff packages while Git inspection is anchored to one canonical nested repository.
-    The path is always constrained to stay inside the project root.
+    New manifests may use `repositories`, but this function remains backward compatible
+    for existing project files and tests that use `repository.local_path`.
     """
     repository = manifest.get("repository") or {}
     raw = str(repository.get("local_path") or ".").strip() or "."
@@ -65,6 +65,11 @@ def resolve_git_root(project_root: Path, manifest: dict[str, Any]) -> tuple[Path
 
 
 def git_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Legacy single-repository snapshot helper.
+
+    `build_snapshot` now uses `inspect_repositories` so a project can have frontend,
+    backend/algorithm and other repositories while still producing one project snapshot.
+    """
     repo, repository_path = resolve_git_root(project_root, manifest)
     if repo is None:
         return {
@@ -247,11 +252,62 @@ def discover_projects() -> list[tuple[Path, dict[str, Any]]]:
     return discovered
 
 
+def _aggregate_git_change_analysis(
+    runtime: list[tuple[dict[str, Any], Path | None, dict[str, Any]]],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    repository_results: list[dict[str, Any]] = []
+    all_items: list[dict[str, Any]] = []
+    total_changed = 0
+    total_analyzed = 0
+    truncated = False
+
+    for repository, repo_path, git_state in runtime:
+        result = analyze_git_changes(
+            repo_path,
+            str(git_state.get("repository_path") or repository.get("local_path") or "."),
+            git_state,
+            manifest,
+        )
+        enriched_result = dict(result)
+        enriched_result.update(
+            {
+                "repository_id": repository.get("id"),
+                "repository_role": repository.get("role"),
+                "repository_url": repository.get("url"),
+                "primary": bool(repository.get("primary")),
+            }
+        )
+        enriched_items: list[dict[str, Any]] = []
+        for item in result.get("items") or []:
+            enriched = dict(item)
+            enriched["repository_id"] = repository.get("id")
+            enriched["repository_role"] = repository.get("role")
+            enriched["repository_url"] = repository.get("url")
+            enriched_items.append(enriched)
+        enriched_result["items"] = enriched_items
+        repository_results.append(enriched_result)
+        all_items.extend(enriched_items)
+        total_changed += int(result.get("changed_file_count") or 0)
+        total_analyzed += int(result.get("analyzed_file_count") or 0)
+        truncated = truncated or bool(result.get("truncated"))
+
+    return {
+        "enabled": any(bool(item.get("enabled")) for item in repository_results),
+        "multi_repository": len(repository_results) > 1,
+        "repository_count": len(repository_results),
+        "changed_file_count": total_changed,
+        "analyzed_file_count": total_analyzed,
+        "truncated": truncated,
+        "repositories": repository_results,
+        "items": all_items[:1000],
+    }
+
+
 def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     project = manifest["project"]
     security = manifest.get("security") or {}
-    git_state = git_snapshot(project_root, manifest)
-    repo, repository_path = resolve_git_root(project_root, manifest)
+    git_state, repository_runtime = inspect_repositories(project_root, manifest)
     snapshot = {
         "schema_version": 1,
         "snapshot_type": "local.workspace",
@@ -269,13 +325,8 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
 
     # metadata_only 不读取正文；local_analysis 才进入增量文档解析与本地分析。
     snapshot["analysis"] = analyze_project_files(project_root, manifest, STATE_ROOT)
-    # Git diff 只在本机做语义分析，中央收到结构化摘要而不是 patch 正文。
-    snapshot["git_change_analysis"] = analyze_git_changes(
-        repo,
-        repository_path,
-        git_state,
-        manifest,
-    )
+    # 每个本地 Git repo 分开分析 diff，中央只收到结构化摘要。最终仍合并为一个项目证据流。
+    snapshot["git_change_analysis"] = _aggregate_git_change_analysis(repository_runtime, manifest)
     return snapshot
 
 
