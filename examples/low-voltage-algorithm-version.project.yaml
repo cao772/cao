@@ -83,6 +83,13 @@ analysis:
   csv_columns: 50
   pdf_pages: 50
 
+  # 分析 canonical Git repo 的本地未提交改动。diff 只在本机使用，中央只收结构化摘要。
+  git_changes:
+    enabled: true
+    use_llm: false
+    max_files: 80
+    max_diff_chars_per_file: 12000
+
 progress:
   sources:
     - git
