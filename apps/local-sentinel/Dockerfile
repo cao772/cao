@@ -7,8 +7,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY apps/local-sentinel/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-COPY apps/local-sentinel/sentinel.py ./sentinel.py
-COPY apps/local-sentinel/document_pipeline.py ./document_pipeline.py
+COPY apps/local-sentinel/*.py ./
 
 ENV PROJECTS_ROOT=/projects \
     SENTINEL_STATE_ROOT=/state \
