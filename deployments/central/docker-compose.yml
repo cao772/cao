@@ -12,5 +12,27 @@ services:
       - project-data:/data
     restart: unless-stopped
 
+  # Remote GitLab facts are collected once centrally instead of every developer
+  # laptop polling the same repositories. Enable with: docker compose --profile gitlab up -d
+  gitlab-collector:
+    profiles: ["gitlab"]
+    build:
+      context: ../..
+      dockerfile: apps/remote-collector/Dockerfile
+    environment:
+      GITLAB_BASE_URL: ${GITLAB_BASE_URL:-http://git.hyetec.com}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:?set GITLAB_TOKEN when enabling gitlab profile}
+      CENTRAL_URL: http://server:8080
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:?set COLLECTOR_TOKEN}
+      POLL_INTERVAL_SECONDS: ${GITLAB_POLL_INTERVAL_SECONDS:-300}
+      INITIAL_LOOKBACK_HOURS: ${GITLAB_INITIAL_LOOKBACK_HOURS:-24}
+    volumes:
+      - ../../config/gitlab-projects.yaml:/config/gitlab-projects.yaml:ro
+      - remote-collector-state:/state
+    depends_on:
+      - server
+    restart: unless-stopped
+
 volumes:
   project-data:
+  remote-collector-state:
