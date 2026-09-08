@@ -21,5 +21,34 @@ services:
       - sentinel-state:/state
     restart: unless-stopped
 
+  agent-mcp:
+    build:
+      context: ../..
+      dockerfile: apps/local-sentinel/Dockerfile
+    command: ["python", "mcp_server.py"]
+    environment:
+      PROJECTS_ROOT: /projects
+      SENTINEL_STATE_ROOT: /state
+      CENTRAL_URL: ${CENTRAL_URL}
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN}
+      USER_ID: ${USER_ID:-developer}
+      DEVICE_ID: ${DEVICE_ID:-local-device}
+      AGENT_VENDOR: ${AGENT_VENDOR:-OpenAI}
+      AGENT_NAME: ${AGENT_NAME:-Codex}
+      AGENT_INSTANCE_ID: ${AGENT_INSTANCE_ID:-}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: ${MCP_PORT:-6410}
+      AGENT_BRIDGE_HTTP_TIMEOUT: ${AGENT_BRIDGE_HTTP_TIMEOUT:-20}
+    ports:
+      # Bind to loopback only: coding agents on this computer can access MCP,
+      # but the service is not exposed to the LAN by default.
+      - "127.0.0.1:${MCP_PORT:-6410}:${MCP_PORT:-6410}"
+    volumes:
+      - ${PROJECTS_PATH:?set PROJECTS_PATH}:/projects:ro
+      - sentinel-state:/state
+    depends_on:
+      - sentinel
+    restart: unless-stopped
+
 volumes:
   sentinel-state:
