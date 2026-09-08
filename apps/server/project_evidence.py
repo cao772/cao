@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any
 
@@ -8,6 +9,11 @@ from evidence_fusion import STATUS_LABELS, fuse_evidence, similarity
 
 NEGATIVE_TEST_MARKERS = ("失败", "不通过", "未通过", "failed", "failure", "error", "异常")
 POSITIVE_TEST_MARKERS = ("通过", "pass", "passed", "成功", "ok")
+CORE_NOISE = (
+    "回归测试", "测试结果", "测试", "验证", "通过", "失败", "不通过", "未通过",
+    "修复", "新增", "实现", "优化", "调整", "问题", "功能", "任务", "需求",
+    "成功", "异常", "开发", "进行", "完成", "接口", "页面",
+)
 
 
 def _test_outcome(text: str) -> str | None:
@@ -19,13 +25,19 @@ def _test_outcome(text: str) -> str | None:
     return None
 
 
-def _event_for_workspace(event: dict[str, Any], snapshot: dict[str, Any]) -> bool:
-    """Keep agent events attached to the developer who owns the workspace.
+def _normalized(value: Any) -> str:
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", str(value or "").lower())
 
-    Project-wide events without user_id are allowed, but normal Codex/TRAE/Hermes
-    reporters are expected to include user_id so that events are not duplicated into
-    every developer's local evidence set.
-    """
+
+def _semantic_core(value: Any) -> str:
+    text = _normalized(value)
+    for marker in CORE_NOISE:
+        text = text.replace(_normalized(marker), "")
+    return text
+
+
+def _event_for_workspace(event: dict[str, Any], snapshot: dict[str, Any]) -> bool:
+    """Keep agent events attached to the developer who owns the workspace."""
     event_user = str(event.get("user_id") or "").strip()
     snapshot_user = str(snapshot.get("user_id") or "").strip()
     return not event_user or event_user == snapshot_user
@@ -81,6 +93,60 @@ def _find_global_item(local_item: dict[str, Any], global_items: list[dict[str, A
     return best_item if best_score >= 0.62 else None
 
 
+def _find_item_for_unlinked(entry: dict[str, Any], global_items: list[dict[str, Any]], kind: str) -> tuple[dict[str, Any] | None, float]:
+    task_id = str(entry.get("task_id") or "").strip()
+    if task_id:
+        exact = next((item for item in global_items if str(item.get("task_id") or "").strip() == task_id), None)
+        if exact is not None:
+            return exact, 1.0
+
+    text = str(entry.get("text") or "").strip()
+    if not text or not global_items:
+        return None, 0.0
+
+    thresholds = {"tests": 0.28, "blockers": 0.30, "code_changes": 0.36, "agent_events": 0.48}
+    threshold = thresholds.get(kind, 0.36)
+    best_score = 0.0
+    best_item = None
+    for item in global_items:
+        score = similarity(text, item.get("title"))
+        if score > best_score:
+            best_score = score
+            best_item = item
+    if best_item is not None and best_score >= threshold:
+        return best_item, best_score
+
+    # A frequent real-world pattern is “修复工程量提取问题” vs
+    # “工程量提取回归测试通过”. Strip generic action/outcome words and only
+    # accept a strong shared business phrase (>=4 chars) to avoid arbitrary links.
+    evidence_core = _semantic_core(text)
+    if len(evidence_core) >= 4:
+        for item in global_items:
+            title_core = _semantic_core(item.get("title"))
+            if len(title_core) >= 4 and (evidence_core in title_core or title_core in evidence_core):
+                return item, 0.72
+
+    return None, best_score
+
+
+def _reattach_unlinked(global_items: list[dict[str, Any]], unlinked: dict[str, list[dict[str, Any]]]) -> None:
+    for kind in ("tests", "blockers", "code_changes", "agent_events"):
+        remaining: list[dict[str, Any]] = []
+        for entry in unlinked.get(kind) or []:
+            target, score = _find_item_for_unlinked(entry, global_items, kind)
+            if target is None:
+                remaining.append(entry)
+                continue
+            linked = dict(entry)
+            linked["cross_workspace_match_score"] = round(score, 3)
+            key = _evidence_key(linked)
+            evidence_keys = target.setdefault("_evidence_keys", set())
+            if key not in evidence_keys:
+                evidence_keys.add(key)
+                target.setdefault("evidence", []).append(linked)
+        unlinked[kind] = remaining
+
+
 def _derive_global_status(item: dict[str, Any]) -> tuple[str, list[str]]:
     evidence = item.get("evidence") or []
     contributions = item.get("workspace_contributions") or []
@@ -129,7 +195,7 @@ def _derive_global_status(item: dict[str, Any]) -> tuple[str, list[str]]:
     if test_failed:
         return "test_failing", ["跨工作区证据中存在失败/不通过测试"]
 
-    contributor_count = len({str(item.get("user_id") or "") for item in contributions if item.get("user_id")})
+    contributor_count = len({str(contribution.get("user_id") or "") for contribution in contributions if contribution.get("user_id")})
     if contributor_count > 1:
         reasons.append(f"该事项由{contributor_count}名开发人员提供证据")
 
@@ -185,13 +251,7 @@ def fuse_project_evidence(
     workspace_snapshots: list[dict[str, Any]],
     agent_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Fuse task evidence across every developer's latest workspace for a project.
-
-    Local evidence is first interpreted per workspace with the existing conservative
-    evidence engine. Equivalent work items are then merged by explicit task_id or a
-    high-confidence title match. This keeps attribution to each person/device while
-    producing one project-level task state.
-    """
+    """Fuse task evidence across every developer's latest workspace for a project."""
     agent_events = agent_events or []
     global_items: list[dict[str, Any]] = []
     unlinked: dict[str, list[dict[str, Any]]] = {
@@ -286,6 +346,11 @@ def fuse_project_evidence(
             enriched["workspace_name"] = workspace.get("workspace_name")
             global_test_failures.append(enriched)
 
+    # Evidence that was ambiguous inside one workspace gets a second chance only
+    # after all project tasks are known. Strong business-phrase matching allows a
+    # test from developer B to validate implementation evidence from developer A.
+    _reattach_unlinked(global_items, unlinked)
+
     status_counts: Counter[str] = Counter()
     for item in global_items:
         item.pop("_evidence_keys", None)
@@ -345,7 +410,7 @@ def fuse_project_evidence(
             "quiet": "暂无明显开发活动",
         }[project_state],
         "formal_completion_supported": False,
-        "formal_completion_reason": "已完成多人工作区本地证据融合，但尚未接入PR/MR、CI、Merge和部署证据。",
+        "formal_completion_reason": "已完成人员/工作区本地证据融合，但尚未接入PR/MR、CI、Merge和部署证据。",
         "summary": {
             "workspace_count": len(workspace_snapshots),
             "contributor_count": len({str(item.get("user_id") or "") for item in workspace_snapshots if item.get("user_id")}),
