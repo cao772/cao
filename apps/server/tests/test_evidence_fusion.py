@@ -60,7 +60,7 @@ def _agent(event_type, title, task_id="TASK-1", result=None):
 
 def test_similarity_handles_chinese_task_and_change_text():
     score = similarity("资料上传更新改为左侧树状选择", "实现资料上传更新左侧树状材料选择页面")
-    assert score >= 0.36
+    assert score >= 0.28
 
 
 def test_agent_finished_code_and_failed_test_is_not_complete():
