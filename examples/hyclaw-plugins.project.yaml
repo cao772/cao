@@ -1,0 +1,73 @@
+version: 1
+
+project:
+  id: hyclaw-plugins
+  name: HyClaw Plugins
+  owner: caoyh
+  team: ai-project
+  description: >-
+    HyClaw 插件仓库示例。具体业务项目名称、资料目录和测试目录可在实际开发人员工作区中继续细化。
+
+repository:
+  id: hyclaw-plugins
+  role: plugins
+  provider: gitlab
+  url: http://git.hyetec.com/hyetec/rrj26rj001/hyclaw/plugins/hyclaw-plugins.git
+  default_branch: main
+  local_path: .
+
+paths:
+  code:
+    - .
+  documents:
+    - README.md
+    - docs
+    - '*.md'
+    - '*.docx'
+    - '*.xlsx'
+  tests:
+    - tests
+  outputs:
+    - output
+    - outputs
+
+ignore:
+  - .git
+  - .DS_Store
+  - '~$*'
+  - '.~*'
+  - __MACOSX
+  - node_modules
+  - .venv
+  - __pycache__
+  - dist
+  - build
+  - '*.zip'
+  - '*.tar.gz'
+
+security:
+  mode: local_analysis
+  upload_source_code: false
+  upload_documents: false
+
+analysis:
+  enabled: true
+  include:
+    - documents
+    - tests
+    - outputs
+  use_llm: false
+  git_changes:
+    enabled: true
+    use_llm: false
+    max_files: 80
+    max_diff_chars_per_file: 12000
+
+progress:
+  sources:
+    - git
+    - tests
+    - local_workspace
+    - tasks
+    - agent
+    - ci
