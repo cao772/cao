@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 研发协同管理平台</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>
+          <h1>研发协同管理</h1>
+          <p>Project Intelligence</p>
+        </div>
+      </div>
+
+      <div class="sidebar-section-title">项目</div>
+      <nav id="project-list" class="project-list"></nav>
+
+      <div class="sidebar-footer">
+        <span id="api-state" class="health-dot"></span>
+        <span id="api-state-text">连接中央服务...</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">AI DEV MANAGEMENT</div>
+          <h2 id="project-title">研发项目总览</h2>
+          <p id="project-subtitle">汇总本地开发、Coding Agent 与 GitLab/GitHub 工程事实</p>
+        </div>
+        <button id="refresh-btn" class="secondary-button" type="button">刷新数据</button>
+      </header>
+
+      <section id="overview" class="overview-grid"></section>
+
+      <section class="content-grid">
+        <div class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>任务与证据状态</h3>
+              <p>状态由项目资料、本地 Git、测试、Agent 与远端 DevOps 证据共同决定</p>
+            </div>
+            <span id="task-scope" class="badge neutral">等待数据</span>
+          </div>
+          <div id="task-table" class="table-wrap"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>项目当前状态</h3>
+              <p>Project Memory 最新结构化摘要</p>
+            </div>
+          </div>
+          <div id="project-memory" class="memory-block"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h3>人员与 Agent</h3>
+              <p>按开发人员汇总工作区与 Coding Agent</p>
+            </div>
+          </div>
+          <div id="contributors" class="contributors"></div>
+        </div>
+
+        <div class="panel panel-wide">
+          <div class="panel-header">
+            <div>
+              <h3>研发时间线</h3>
+              <p>本地快照、Agent 行为、GitLab/GitHub 事件统一排序</p>
+            </div>
+            <span id="timeline-count" class="badge neutral">0 条</span>
+          </div>
+          <div id="timeline" class="timeline"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
