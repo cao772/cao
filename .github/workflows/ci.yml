@@ -37,6 +37,23 @@ jobs:
           PYTHONPATH: apps/local-sentinel:apps/server:apps/remote-collector
         run: python -m pytest -q apps/local-sentinel/tests apps/server/tests apps/remote-collector/tests
 
+      - name: Validate configs
+        env:
+          COLLECTOR_TOKEN: ci-test-token
+        run: |
+          python - <<'PY'
+          import json, yaml
+          from pathlib import Path
+          json.loads(Path('schemas/project.schema.json').read_text())
+          cfg = yaml.safe_load(Path('config/gitlab-projects.yaml').read_text())
+          assert cfg['version'] == 1
+          assert len(cfg['projects']) >= 3
+          PY
+          docker compose -f deployments/central/docker-compose.yml config >/dev/null
+          GITLAB_TOKEN=ci-gitlab-token docker compose -f deployments/central/docker-compose.yml --profile gitlab config >/dev/null
+          PROJECTS_PATH=/tmp/projects CENTRAL_URL=http://localhost:8080 USER_ID=ci DEVICE_ID=ci-device \
+            docker compose -f deployments/local/docker-compose.yml config >/dev/null
+
       - name: Build containers
         run: |
           docker build -f apps/local-sentinel/Dockerfile -t ai-dev-sentinel:test .
