@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import re
@@ -19,19 +21,23 @@ TEXT_SUFFIXES = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".go",
     ".rs", ".c", ".h", ".cpp", ".hpp", ".sh", ".sql",
 }
-SUPPORTED_SUFFIXES = TEXT_SUFFIXES | {".docx", ".xlsx"}
+SUPPORTED_SUFFIXES = TEXT_SUFFIXES | {".docx", ".xlsx", ".csv", ".pdf"}
 SENSITIVE_NAMES = {
     ".env", ".env.local", ".env.production",
     "id_rsa", "id_ed25519",
 }
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 SENSITIVE_PARTS = {".ssh", ".aws", ".kube", ".git"}
+ARCHIVE_ENDINGS = (".zip", ".7z", ".tar.gz", ".tgz", ".tar", ".gz")
 
 DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_TEXT_CHARS = 40_000
 DEFAULT_MAX_ITEMS = 500
 DEFAULT_XLSX_ROWS = 200
 DEFAULT_XLSX_COLS = 30
+DEFAULT_CSV_ROWS = 500
+DEFAULT_CSV_COLS = 50
+DEFAULT_PDF_PAGES = 50
 
 
 def utc_now() -> str:
@@ -103,13 +109,14 @@ def iter_analysis_files(project_root: Path, manifest: dict[str, Any]) -> Iterabl
 def classify_role(relative: str, category: str) -> str:
     text = relative.lower()
     rules = [
-        ("requirement", ["需求", "requirement", "prd", "需求说明", "需求规格"]),
-        ("test_result", ["测试", "test", "验收", "验证", "评测", "qa"]),
+        ("requirement", ["需求", "requirement", "prd", "需求说明", "需求规格", "开发拆解"]),
+        ("test_result", ["测试", "test", "验收", "验证", "评测", "qa", "问题反馈"]),
+        ("progress", ["进度", "工作任务", "开发任务", "任务清单", "工作计划"]),
         ("handoff", ["交接", "handoff", "移交"]),
         ("report", ["周报", "日报", "月报", "报告", "report"]),
-        ("design", ["设计", "架构", "architecture", "design", "方案"]),
+        ("design", ["设计", "架构", "architecture", "design", "方案", "规范"]),
         ("interface", ["接口", "api", "interface"]),
-        ("deployment", ["部署", "deploy", "docker", "compose"]),
+        ("deployment", ["部署", "deploy", "docker", "compose", "上线版本"]),
         ("decision", ["决策", "decision", "会议纪要", "meeting"]),
     ]
     for role, keywords in rules:
@@ -201,7 +208,71 @@ def parse_xlsx(path: Path, max_chars: int, max_rows: int, max_cols: int) -> tupl
     }
 
 
-def parse_file(path: Path, max_chars: int, xlsx_rows: int, xlsx_cols: int) -> tuple[str, dict[str, Any]]:
+def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace"), "utf-8-replace"
+
+
+def parse_csv(path: Path, max_chars: int, max_rows: int, max_cols: int) -> tuple[str, dict[str, Any]]:
+    raw = path.read_bytes()
+    text, encoding = _decode_csv_bytes(raw)
+    reader = csv.reader(io.StringIO(text))
+    chunks: list[str] = []
+    row_count = 0
+    for row in reader:
+        row_count += 1
+        values = [str(value).replace("\n", " ").strip() for value in row[:max_cols]]
+        if any(values):
+            chunks.append("\t".join(values))
+        if row_count >= max_rows:
+            break
+    sampled = _limit_text(chunks, max_chars)
+    return sampled, {
+        "parser": "csv",
+        "encoding": encoding,
+        "sampled_rows": row_count,
+        "sample_limits": {"rows": max_rows, "columns": max_cols},
+        "truncated": len(sampled) >= max_chars or row_count >= max_rows,
+    }
+
+
+def parse_pdf(path: Path, max_chars: int, max_pages: int) -> tuple[str, dict[str, Any]]:
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    total_pages = len(reader.pages)
+    chunks: list[str] = []
+    sampled_pages = 0
+    for page in reader.pages[:max_pages]:
+        sampled_pages += 1
+        page_text = page.extract_text() or ""
+        if page_text.strip():
+            chunks.append(page_text)
+        if sum(len(chunk) for chunk in chunks) >= max_chars:
+            break
+    text = _limit_text(chunks, max_chars)
+    return text, {
+        "parser": "pdf",
+        "pages": total_pages,
+        "sampled_pages": sampled_pages,
+        "ocr_needed": total_pages > 0 and not bool(text.strip()),
+        "truncated": sampled_pages < total_pages or len(text) >= max_chars,
+    }
+
+
+def parse_file(
+    path: Path,
+    max_chars: int,
+    xlsx_rows: int,
+    xlsx_cols: int,
+    csv_rows: int,
+    csv_cols: int,
+    pdf_pages: int,
+) -> tuple[str, dict[str, Any]]:
     suffix = path.suffix.lower()
     if suffix in TEXT_SUFFIXES:
         return parse_text(path, max_chars)
@@ -209,6 +280,10 @@ def parse_file(path: Path, max_chars: int, xlsx_rows: int, xlsx_cols: int) -> tu
         return parse_docx(path, max_chars)
     if suffix == ".xlsx":
         return parse_xlsx(path, max_chars, xlsx_rows, xlsx_cols)
+    if suffix == ".csv":
+        return parse_csv(path, max_chars, csv_rows, csv_cols)
+    if suffix == ".pdf":
+        return parse_pdf(path, max_chars, pdf_pages)
     raise ValueError(f"unsupported suffix: {suffix}")
 
 
@@ -222,11 +297,12 @@ def deterministic_analysis(text: str, role: str, relative: str) -> dict[str, Any
     summary = "；".join(lines[:3])[:600]
 
     keyword_rules = [
-        ("blocker", ["阻塞", "失败", "错误", "无法", "异常", "blocker", "failed", "error"]),
+        ("blocker", ["阻塞", "失败", "错误", "无法", "异常", "问题", "blocker", "failed", "error"]),
         ("requirement", ["需求", "要求", "必须", "应当", "requirement", "must", "should"]),
         ("decision", ["决定", "确定", "采用", "调整为", "decision"]),
         ("task", ["待办", "下一步", "进行中", "todo", "next step"]),
         ("test", ["测试", "通过", "不通过", "passed", "failed", "test"]),
+        ("progress", ["已完成", "完成情况", "本周完成", "当前进度", "开发完成", "进度"]),
         ("deployment", ["部署", "上线", "发布", "deploy", "release"]),
         ("milestone", ["里程碑", "阶段完成", "验收", "milestone"]),
     ]
@@ -276,7 +352,7 @@ def analyze_with_openai_compatible(
         "你是研发项目资料分析器。只根据输入文件内容提取事实，不补充外部知识。"
         "输出严格 JSON，字段必须为 document_role、summary、facts、mentioned_modules。"
         "facts 为数组，每项包含 type 和 text；type 只能是 requirement、decision、task、test、"
-        "blocker、milestone、deployment、note。不要输出源码正文或大段原文。"
+        "progress、blocker、milestone、deployment、note。不要输出源码正文或大段原文。"
     )
     user = (
         f"文件: {relative}\n预分类: {role}\n"
@@ -389,6 +465,17 @@ class AnalysisCache:
         return len(stale)
 
 
+def _unsupported_reason(path: Path) -> str:
+    lower = path.name.lower()
+    if lower.endswith(".doc"):
+        return "旧版 Word DOC，需本地转换为 DOCX 后再做正文解析"
+    if lower.endswith(".pptx"):
+        return "PPTX 正文解析尚未接入"
+    if any(lower.endswith(suffix) for suffix in ARCHIVE_ENDINGS):
+        return "压缩归档默认不展开，避免重复证据与大文件开销"
+    return f"暂不支持正文解析的格式：{path.suffix.lower() or '<none>'}"
+
+
 def analyze_project_files(
     project_root: Path,
     manifest: dict[str, Any],
@@ -412,6 +499,9 @@ def analyze_project_files(
     max_items = int(analysis_cfg.get("max_items", DEFAULT_MAX_ITEMS))
     xlsx_rows = int(analysis_cfg.get("xlsx_rows_per_sheet", DEFAULT_XLSX_ROWS))
     xlsx_cols = int(analysis_cfg.get("xlsx_columns", DEFAULT_XLSX_COLS))
+    csv_rows = int(analysis_cfg.get("csv_rows", DEFAULT_CSV_ROWS))
+    csv_cols = int(analysis_cfg.get("csv_columns", DEFAULT_CSV_COLS))
+    pdf_pages = int(analysis_cfg.get("pdf_pages", DEFAULT_PDF_PAGES))
 
     use_llm = bool(analysis_cfg.get("use_llm", False))
     base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip()
@@ -442,18 +532,37 @@ def analyze_project_files(
             continue
 
         seen_paths.add(relative)
+        role = classify_role(relative, category)
+        role_counts[role] += 1
+
         if is_sensitive_path(path, project_root):
             stats["sensitive_skipped"] += 1
+            items.append({"path": relative, "role": role, "status": "sensitive_skipped"})
             continue
         if path.suffix.lower() not in SUPPORTED_SUFFIXES:
             stats["unsupported"] += 1
+            items.append(
+                {
+                    "path": relative,
+                    "role": role,
+                    "status": "unsupported",
+                    "reason": _unsupported_reason(path),
+                }
+            )
             continue
         if size > max_file_bytes:
             stats["too_large"] += 1
+            items.append(
+                {
+                    "path": relative,
+                    "role": role,
+                    "status": "too_large",
+                    "size": size,
+                    "max_file_bytes": max_file_bytes,
+                }
+            )
             continue
 
-        role = classify_role(relative, category)
-        role_counts[role] += 1
         try:
             digest = sha256_file(path)
         except OSError:
@@ -467,7 +576,15 @@ def analyze_project_files(
             continue
 
         try:
-            text, parser_meta = parse_file(path, max_text_chars, xlsx_rows, xlsx_cols)
+            text, parser_meta = parse_file(
+                path,
+                max_text_chars,
+                xlsx_rows,
+                xlsx_cols,
+                csv_rows,
+                csv_cols,
+                pdf_pages,
+            )
         except Exception as exc:
             stats["parse_error"] += 1
             items.append(
@@ -517,7 +634,11 @@ def analyze_project_files(
     stats["stale_removed"] = cache.prune(seen_paths)
 
     facts: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
     for item in items:
+        if item.get("status") != "analyzed":
+            diagnostics.append(item)
+            continue
         analysis = item.get("analysis") or {}
         for fact in analysis.get("facts") or []:
             facts.append(
@@ -546,6 +667,7 @@ def analyze_project_files(
         "project_memory": {
             "document_role_counts": dict(role_counts),
             "facts": facts,
+            "diagnostics": diagnostics[:200],
         },
         "items": items,
     }
