@@ -63,7 +63,7 @@ def test_similarity_handles_chinese_task_and_change_text():
     assert score >= 0.28
 
 
-def test_agent_finished_code_and_failed_test_is_not_complete():
+def test_unlinked_failed_test_still_blocks_formal_completion():
     title = "修复工程量提取问题"
     payload = _payload(
         requirements=[{"text": title, "path": "需求.xlsx", "role": "requirement"}],
@@ -72,7 +72,10 @@ def test_agent_finished_code_and_failed_test_is_not_complete():
     )
     result = fuse_evidence(payload, [_agent("task.finished", title)])
     item = result["work_items"][0]
-    assert item["status"] == "test_failing"
+    # 低置信度测试不会被强行绑定到任务，但全局失败测试仍会让项目进入关注状态。
+    assert item["status"] == "implementation_claimed_uncommitted"
+    assert result["summary"]["global_test_failure_count"] == 1
+    assert result["project_state"] == "attention"
     assert result["formal_completion_supported"] is False
 
 
