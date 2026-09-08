@@ -14,12 +14,13 @@ from pydantic import BaseModel, Field
 from project_evidence import fuse_project_evidence
 from project_memory import enrich_snapshot_payload
 from project_rollup import build_project_rollup
+from remote_evidence import apply_remote_evidence
 from workspace_inventory import build_workspace_inventory
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.8.0")
+app = FastAPI(title="AI Dev Management API", version="0.9.0")
 
 
 class SnapshotIn(BaseModel):
@@ -48,6 +49,23 @@ class AgentEventIn(BaseModel):
     user_id: str = Field(min_length=1, max_length=200)
     agent: dict[str, Any] = Field(default_factory=dict)
     session_id: str | None = Field(default=None, max_length=300)
+    task_id: str | None = Field(default=None, max_length=300)
+    task_title: str | None = Field(default=None, max_length=1000)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class RemoteEventIn(BaseModel):
+    schema_version: int = 1
+    client_event_id: str | None = None
+    event_type: str = Field(min_length=1, max_length=160)
+    observed_at: str
+    project_id: str = Field(min_length=1, max_length=200)
+    provider: str = Field(min_length=1, max_length=80)
+    repository_id: str = Field(min_length=1, max_length=300)
+    repository_url: str | None = Field(default=None, max_length=2000)
+    branch: str | None = Field(default=None, max_length=500)
+    commit_sha: str | None = Field(default=None, max_length=200)
+    remote_url: str | None = Field(default=None, max_length=3000)
     task_id: str | None = Field(default=None, max_length=300)
     task_title: str | None = Field(default=None, max_length=1000)
     data: dict[str, Any] = Field(default_factory=dict)
@@ -116,6 +134,31 @@ def init_db() -> None:
                 ON agent_events(project_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_agent_events_project_task
                 ON agent_events(project_id, task_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS remote_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_event_id TEXT UNIQUE,
+                project_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                repository_id TEXT NOT NULL,
+                repository_url TEXT,
+                event_type TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                branch TEXT,
+                commit_sha TEXT,
+                remote_url TEXT,
+                task_id TEXT,
+                task_title TEXT,
+                data_json TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_remote_events_project_id_id
+                ON remote_events(project_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_events_project_repo
+                ON remote_events(project_id, repository_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_events_project_task
+                ON remote_events(project_id, task_id, id DESC);
             """
         )
 
@@ -133,6 +176,12 @@ def require_collector_token(x_collector_token: str | None) -> None:
 def _agent_event_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["agent"] = json.loads(item.pop("agent_json"))
+    item["data"] = json.loads(item.pop("data_json"))
+    return item
+
+
+def _remote_event_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
     item["data"] = json.loads(item.pop("data_json"))
     return item
 
@@ -158,6 +207,23 @@ def recent_agent_events(project_id: str, limit: int = 200) -> list[dict[str, Any
             (project_id, limit),
         ).fetchall()
     return [_agent_event_row(row) for row in reversed(rows)]
+
+
+def recent_remote_events(project_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, client_event_id, project_id, provider, repository_id,
+                   repository_url, event_type, observed_at, received_at, branch,
+                   commit_sha, remote_url, task_id, task_title, data_json
+            FROM remote_events
+            WHERE project_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (project_id, limit),
+        ).fetchall()
+    return [_remote_event_row(row) for row in reversed(rows)]
 
 
 def latest_snapshot(project_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -217,12 +283,14 @@ def project_evidence(project_id: str) -> dict[str, Any]:
     if not snapshots:
         raise HTTPException(status_code=404, detail="project snapshot not found")
     events = recent_agent_events(project_id, 500)
-    return fuse_project_evidence(snapshots, events)
+    local = fuse_project_evidence(snapshots, events)
+    remote = recent_remote_events(project_id, 1000)
+    return apply_remote_evidence(local, remote)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.8.0"}
+    return {"status": "ok", "version": "0.9.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -339,6 +407,65 @@ def ingest_agent_event(
     }
 
 
+@app.post("/api/v1/remote-events")
+def ingest_remote_event(
+    event: RemoteEventIn,
+    x_collector_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Receive normalized GitHub/GitLab/DevLake commit, MR/PR, CI and deployment facts."""
+    require_collector_token(x_collector_token)
+    received_at = now_utc()
+    client_event_id = event.client_event_id or str(uuid.uuid4())
+
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id, received_at FROM remote_events WHERE client_event_id = ?",
+            (client_event_id,),
+        ).fetchone()
+        if existing is not None:
+            return {
+                "accepted": True,
+                "duplicate": True,
+                "event_id": existing["id"],
+                "client_event_id": client_event_id,
+                "received_at": existing["received_at"],
+            }
+
+        cursor = conn.execute(
+            """
+            INSERT INTO remote_events (
+                client_event_id, project_id, provider, repository_id,
+                repository_url, event_type, observed_at, received_at,
+                branch, commit_sha, remote_url, task_id, task_title, data_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                client_event_id,
+                event.project_id,
+                event.provider,
+                event.repository_id,
+                event.repository_url,
+                event.event_type,
+                event.observed_at,
+                received_at,
+                event.branch,
+                event.commit_sha,
+                event.remote_url,
+                event.task_id,
+                event.task_title,
+                json.dumps(event.data, ensure_ascii=False),
+            ),
+        )
+
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "event_id": cursor.lastrowid,
+        "client_event_id": client_event_id,
+        "received_at": received_at,
+    }
+
+
 @app.get("/api/v1/projects")
 def list_projects() -> list[dict[str, Any]]:
     with get_db() as conn:
@@ -360,6 +487,7 @@ def list_projects() -> list[dict[str, Any]]:
                 "attention_workspace_count": rollup.get("attention_workspace_count", 0),
                 "agents": rollup.get("agents", []),
                 "branches": rollup.get("branches", {}),
+                "remote_event_count": len(recent_remote_events(str(item["project_id"]), 1000)),
             }
         )
         result.append(item)
@@ -415,13 +543,21 @@ def list_project_agent_events(
     return recent_agent_events(project_id, limit)
 
 
+@app.get("/api/v1/projects/{project_id}/remote-events")
+def list_project_remote_events(
+    project_id: str,
+    limit: int = Query(default=200, ge=1, le=2000),
+) -> list[dict[str, Any]]:
+    return recent_remote_events(project_id, limit)
+
+
 @app.get("/api/v1/projects/{project_id}/evidence")
 def get_project_evidence(project_id: str) -> dict[str, Any]:
     fusion = project_evidence(project_id)
     fusion["project_rollup"] = project_rollup(project_id)
     fusion["scope_note"] = (
-        "任务级证据已融合该项目所有开发人员的最新本地工作区；"
-        "当前仍只覆盖本地资料、Git、测试和Agent事件，尚未纳入PR/MR、CI、Merge和部署事实。"
+        "任务级证据已融合所有开发人员最新本地工作区，并可叠加GitLab/GitHub/DevLake远端事件；"
+        "只有CI通过、代码合并和部署成功三类远端证据齐备时才判定正式完成。"
     )
     return fusion
 
@@ -441,7 +577,7 @@ def list_project_tasks(project_id: str) -> dict[str, Any]:
 
 @app.get("/api/v1/projects/{project_id}/current")
 def get_current_project(project_id: str) -> dict[str, Any]:
-    """Return project-level rollup, cross-workspace task evidence and latest workspace details."""
+    """Return project rollup, local/remote task evidence and latest workspace details."""
     item, payload = latest_snapshot(project_id)
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
     events = recent_agent_events(project_id, 300)
@@ -452,10 +588,11 @@ def get_current_project(project_id: str) -> dict[str, Any]:
     item["workspace_inventory"] = payload.get("workspace_inventory") or {}
     item["current_project_memory"] = memory
     item["agent_events"] = events[-100:]
+    item["remote_events"] = recent_remote_events(project_id, 200)[-100:]
     item["evidence_fusion"] = project_evidence(project_id)
     item["project_rollup"] = project_rollup(project_id)
     item["evidence_scope_note"] = (
-        "evidence_fusion 已按任务融合所有开发人员最新工作区；"
-        "当前页面上的 git/current_project_memory 仍表示最近一次上传的工作区详情。"
+        "evidence_fusion 已按任务融合多人本地工作区和远端DevOps事实；"
+        "页面上的 git/current_project_memory 仍表示最近一次上传的本地工作区详情。"
     )
     return item
