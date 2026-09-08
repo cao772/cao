@@ -1,0 +1,90 @@
+version: 1
+
+project:
+  id: low-voltage
+  name: 低电压精准立项资料审核智能体
+  owner: caoyh
+  team: ai-project
+  description: >-
+    适配真实“algorithm版本管理”目录：项目资料、测试表、问题反馈、标准文件与代码目录混放，
+    同时存在历史代码副本、交接包和其他项目资料。
+
+repository:
+  # 截图只能确认当前代码目录名，远端 GitHub/GitLab 地址后续按实际仓库替换。
+  provider: other
+  url: local://algorithm-ryj
+  default_branch: ryj
+  local_path: algorithm-ryj
+  development_branches:
+    - ryj
+    - cao
+    - cyh
+
+paths:
+  code:
+    - algorithm-ryj
+    - api_servers.py
+
+  # 真实目录中的主要项目资料都在根目录，用 glob 白名单纳管。
+  documents:
+    - '*.xlsx'
+    - '*.csv'
+    - '*.docx'
+    - '*.pdf'
+
+  tests:
+    - '*测试*.xlsx'
+    - '*问题反馈*.xlsx'
+    - '*工作任务*.xlsx'
+
+  outputs: []
+
+ignore:
+  # Finder / Office 临时文件
+  - .DS_Store
+  - '~$*'
+  - '.~*'
+  - __MACOSX
+
+  # 压缩包只保留为人工归档，不作为第二份项目证据重复分析。
+  - '*.zip'
+  - '*.tar.gz'
+  - '*.tgz'
+
+  # 明确的旧代码副本不参与当前 Git 状态。
+  - 'algorithm-ryj 5'
+  - 'algorithm-ryj 7_副本'
+
+  # 截图中属于另一个“生产项目四虚风险智能研判”项目的资料，防止跨项目污染。
+  - 金仲铂新需求
+  - 生产项目四虚风险智能研判需求整理表.xlsx
+
+  # 明确副本可由业务决定保留历史或直接忽略；本示例先排除当前状态分析。
+  - '副本低电压项目 8.12问题反馈表(5).xlsx'
+
+security:
+  mode: local_analysis
+  upload_source_code: false
+  upload_documents: false
+
+analysis:
+  enabled: true
+  include:
+    - documents
+    - tests
+    - outputs
+  use_llm: false
+  max_file_bytes: 8388608
+  max_text_chars: 40000
+  max_items: 500
+  xlsx_rows_per_sheet: 200
+  xlsx_columns: 30
+
+progress:
+  sources:
+    - git
+    - tests
+    - local_workspace
+    - tasks
+    - agent
+    - ci
