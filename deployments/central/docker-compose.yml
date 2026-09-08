@@ -12,6 +12,16 @@ services:
       - project-data:/data
     restart: unless-stopped
 
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "${WEB_PORT:-8088}:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
   # Remote GitLab facts are collected once centrally instead of every developer
   # laptop polling the same repositories. Enable with: docker compose --profile gitlab up -d
   gitlab-collector:
