@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from agent_bridge import (
+    AGENT_NAME,
+    AGENT_VENDOR,
+    get_project_context,
+    get_project_tasks,
+    list_managed_projects,
+    report_agent_event,
+)
+
+MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
+MCP_PORT = int(os.getenv("MCP_PORT", "6410"))
+
+mcp = FastMCP(
+    "AI Dev Project Sentinel",
+    instructions=(
+        "Use this server to read shared project context and report structured coding-agent activity. "
+        "Do not treat task.finished as formal delivery; the central evidence engine independently verifies "
+        "local Git, tests, GitLab/GitHub, CI, merge and deployment facts."
+    ),
+    host=MCP_HOST,
+    port=MCP_PORT,
+)
+
+
+@mcp.tool()
+def list_projects() -> list[dict[str, Any]]:
+    """List project.yaml-managed projects visible on this developer machine."""
+    return list_managed_projects()
+
+
+@mcp.tool()
+def get_context(project_id: str) -> dict[str, Any]:
+    """Get fresh local Git state plus compact shared project memory and task state."""
+    return get_project_context(project_id)
+
+
+@mcp.tool()
+def get_tasks(project_id: str) -> dict[str, Any]:
+    """Get the central task/evidence view for one project without returning source code or document bodies."""
+    return get_project_tasks(project_id)
+
+
+@mcp.tool()
+def report_task_started(
+    project_id: str,
+    task_title: str,
+    task_id: str = "",
+    session_id: str = "",
+    summary: str = "",
+) -> dict[str, Any]:
+    """Report that this coding agent started a task."""
+    return report_agent_event(
+        event_type="task.started",
+        project_id=project_id,
+        task_title=task_title,
+        task_id=task_id or None,
+        session_id=session_id or None,
+        data={"summary": summary} if summary else {},
+    )
+
+
+@mcp.tool()
+def report_task_progress(
+    project_id: str,
+    task_title: str,
+    summary: str,
+    task_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any]:
+    """Report a factual task progress update. Prefer concrete changes/blockers over guessed percentages."""
+    return report_agent_event(
+        event_type="task.progress",
+        project_id=project_id,
+        task_title=task_title,
+        task_id=task_id or None,
+        session_id=session_id or None,
+        data={"summary": summary},
+    )
+
+
+@mcp.tool()
+def report_task_finished(
+    project_id: str,
+    task_title: str,
+    summary: str = "",
+    task_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any]:
+    """Report that this agent's local work is finished; this does not mark the project task formally complete."""
+    return report_agent_event(
+        event_type="task.finished",
+        project_id=project_id,
+        task_title=task_title,
+        task_id=task_id or None,
+        session_id=session_id or None,
+        data={"summary": summary} if summary else {},
+    )
+
+
+@mcp.tool()
+def report_test_result(
+    project_id: str,
+    task_title: str,
+    passed: int,
+    failed: int,
+    task_id: str = "",
+    session_id: str = "",
+    summary: str = "",
+) -> dict[str, Any]:
+    """Report structured local test counts for a task."""
+    passed = max(int(passed), 0)
+    failed = max(int(failed), 0)
+    data = {
+        "passed": passed,
+        "failed": failed,
+        "total": passed + failed,
+        "summary": summary or f"tests: {passed} passed, {failed} failed",
+    }
+    return report_agent_event(
+        event_type="test.result",
+        project_id=project_id,
+        task_title=task_title,
+        task_id=task_id or None,
+        session_id=session_id or None,
+        data=data,
+    )
+
+
+@mcp.tool()
+def report_blocker(
+    project_id: str,
+    task_title: str,
+    blocker: str,
+    task_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any]:
+    """Report a concrete blocker that prevents or delays a task."""
+    return report_agent_event(
+        event_type="blocker.reported",
+        project_id=project_id,
+        task_title=task_title,
+        task_id=task_id or None,
+        session_id=session_id or None,
+        data={"summary": blocker, "blocker": blocker},
+    )
+
+
+if __name__ == "__main__":
+    print(
+        f"Starting AI Dev Project Sentinel MCP for {AGENT_VENDOR}/{AGENT_NAME} "
+        f"on {MCP_HOST}:{MCP_PORT}"
+    )
+    mcp.run(transport="streamable-http")
