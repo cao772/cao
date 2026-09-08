@@ -15,6 +15,7 @@ from typing import Any, Iterable
 import yaml
 
 from document_pipeline import analyze_project_files, is_ignored, is_sensitive_path
+from git_change_analysis import analyze_git_changes
 
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
 STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
@@ -23,7 +24,7 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "900"))
 USER_ID = os.getenv("USER_ID", os.getenv("USER", "unknown"))
 DEVICE_ID = os.getenv("DEVICE_ID", socket.gethostname())
-SENTINEL_VERSION = "0.3.0"
+SENTINEL_VERSION = "0.4.0"
 
 
 def utc_now() -> str:
@@ -249,6 +250,8 @@ def discover_projects() -> list[tuple[Path, dict[str, Any]]]:
 def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     project = manifest["project"]
     security = manifest.get("security") or {}
+    git_state = git_snapshot(project_root, manifest)
+    repo, repository_path = resolve_git_root(project_root, manifest)
     snapshot = {
         "schema_version": 1,
         "snapshot_type": "local.workspace",
@@ -260,12 +263,19 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "workspace_name": project_root.name,
         "collector": {"name": "project-sentinel", "version": SENTINEL_VERSION},
         "security_mode": security.get("mode", "metadata_only"),
-        "git": git_snapshot(project_root, manifest),
+        "git": git_state,
         "files": manifest_metadata(project_root, manifest),
     }
 
     # metadata_only 不读取正文；local_analysis 才进入增量文档解析与本地分析。
     snapshot["analysis"] = analyze_project_files(project_root, manifest, STATE_ROOT)
+    # Git diff 只在本机做语义分析，中央收到结构化摘要而不是 patch 正文。
+    snapshot["git_change_analysis"] = analyze_git_changes(
+        repo,
+        repository_path,
+        git_state,
+        manifest,
+    )
     return snapshot
 
 
