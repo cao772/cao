@@ -1,0 +1,19 @@
+# Machine-local deployment configuration, credentials and evidence.
+.env
+.env.*
+!.env.example
+.local/
+*.local.yml
+*.local.yaml
+
+# Python/runtime artifacts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.log
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+node_modules/

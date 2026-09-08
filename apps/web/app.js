@@ -87,7 +87,7 @@ function renderOverview(project, detail) {
   const rollup = current.project_rollup || {};
   const stateLabel = fusion.project_state_label || project.project_state_label || '暂无活动';
   els.overview.innerHTML = [
-    metric('项目状态', stateLabel, fusion.formal_completion_supported ? '已启用远端证据闭环' : '当前以本地证据为主', true),
+    metric('项目状态', stateLabel, (summary.remote_event_count || 0) > 0 ? '已收到远端证据，按任务核验' : '尚无远端证据，当前仅有本地记录', true),
     metric('开发人员', rollup.contributor_count ?? project.contributor_count ?? 0, `${rollup.workspace_count ?? project.workspace_count ?? 0} 个工作区`),
     metric('任务事项', (detail.tasks.work_items || []).length, `${summary.completed_work_item_count || 0} 项正式完成`),
     metric('本地未提交', rollup.dirty_workspace_count ?? project.dirty_workspace_count ?? 0, '涉及的工作区'),
@@ -98,8 +98,9 @@ function renderOverview(project, detail) {
 function renderTasks(detail) {
   const tasks = detail.tasks || {};
   const items = tasks.work_items || [];
-  els.taskScope.textContent = tasks.formal_completion_supported ? '证据闭环' : '本地证据';
-  els.taskScope.className = `badge ${tasks.formal_completion_supported ? 'good' : 'warn'}`;
+  const hasRemoteEvidence = (tasks.summary?.remote_event_count || 0) > 0;
+  els.taskScope.textContent = hasRemoteEvidence ? '本地与远端证据' : '本地证据';
+  els.taskScope.className = `badge ${hasRemoteEvidence ? 'info' : 'warn'}`;
   if (!items.length) {
     els.taskTable.innerHTML = '<div class="empty">尚未形成可关联的任务事项。Agent 可通过 MCP report_task_started 上报明确任务。</div>';
     return;
