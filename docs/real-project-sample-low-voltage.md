@@ -67,7 +67,7 @@ repository:
   local_path: algorithm-ryj
 ```
 
-Sentinel 以项目根目录管理资料，但以 `repository.local_path` 作为当前代码仓的 Git 证据来源。
+Sentinel 以项目根目录管理资料，但以 `repository.local_path` 作为当前代码仓的 Git 证据来源。`local_path` 会被限制在项目根目录内部，不能通过 `../` 越界读取其他目录。
 
 ### 2. 不能扫描所有同名代码目录
 
@@ -99,22 +99,47 @@ alignment_handoff_pack.zip
 
 压缩包是交付形态，不应再次独立计入需求/代码/进度证据。第一版通过 manifest 排除归档包；中央 Workspace Inventory 也增加了目录+压缩包重复诊断能力。
 
-### 5. 需要区分“能索引”与“能读正文”
+### 5. 真实文件名需要更强的“时间/版本”解析
+
+低电压目录大量使用：
+
+```text
+6_4
+6.18
+6.22-6.26
+6.30-7.9
+629-7.9
+2026_6_17
+```
+
+中央 Project Memory 已增加这些格式的识别，并在日期范围里取最后日期作为新鲜度提示。例如：
+
+```text
+6.22-6.26 任务测试.xlsx  -> 06-26
+629-7.9 任务测试.xlsx    -> 07-09
+```
+
+这样同一系列任务/测试表可以正确选当前版本，旧版本仍保留为历史。
+
+### 6. 正文解析能力
 
 当前正文解析支持：
 
 - Markdown / TXT / JSON / YAML / 常见源码文本
 - DOCX
-- XLSX
+- XLSX（只读抽样）
+- CSV（UTF-8 / GB18030 尝试解码，按行列抽样）
+- PDF（文本型 PDF；按页抽样）
 
-当前只做元数据、尚未正式接正文解析的格式包括：
+仍只做元数据或显式诊断、尚未正式接正文解析的主要格式：
 
-- CSV
-- PDF
 - PPTX
 - 旧版 DOC
+- 压缩包 / TAR.GZ
 
-这些文件不能静默消失。中央 `workspace_inventory` 会显式列出 `pending_parsers`，后续逐步补 parser。
+扫描型 PDF 如果 `pypdf` 提取不到文本，会标记 `ocr_needed=true`，不会自动做高成本 OCR。
+
+这些文件不能静默消失。Document Intelligence 会把 `unsupported / too_large / parse_error / sensitive_skipped` 放入 diagnostics，中央 `workspace_inventory` 也会列出待支持格式与风险提示。
 
 ## 推荐放置方式
 
@@ -146,6 +171,6 @@ alignment_handoff_pack.zip
 2. 放入示例 `project.yaml` 并按实际 Git 地址/分支调整；
 3. 启动本地 Docker Sentinel；
 4. 验证 `git.repository_path = algorithm-ryj`；
-5. 验证根目录测试表/需求表被解析；
+5. 验证根目录 Excel/CSV/DOCX/PDF 被正确抽样或诊断；
 6. 验证四虚资料、旧副本和压缩包不进入当前项目状态；
-7. 继续补 CSV/PDF/DOC/PPTX parser 与 Git changed-files 语义分析。
+7. 下一阶段进入 Git changed-files 语义分析与“需求 ↔ 代码 ↔ 测试 ↔ Agent”证据融合。
