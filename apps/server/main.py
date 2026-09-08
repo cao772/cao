@@ -13,12 +13,13 @@ from pydantic import BaseModel, Field
 
 from evidence_fusion import fuse_evidence
 from project_memory import enrich_snapshot_payload
+from project_rollup import build_project_rollup
 from workspace_inventory import build_workspace_inventory
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.6.0")
+app = FastAPI(title="AI Dev Management API", version="0.7.0")
 
 
 class SnapshotIn(BaseModel):
@@ -93,6 +94,8 @@ def init_db() -> None:
                 ON snapshots(project_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_snapshots_observed_at
                 ON snapshots(observed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_snapshots_workspace_latest
+                ON snapshots(project_id, user_id, device_id, workspace_name, id DESC);
 
             CREATE TABLE IF NOT EXISTS agent_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +134,12 @@ def _agent_event_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["agent"] = json.loads(item.pop("agent_json"))
     item["data"] = json.loads(item.pop("data_json"))
+    return item
+
+
+def _snapshot_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["payload"] = json.loads(item.pop("payload_json"))
     return item
 
 
@@ -173,9 +182,39 @@ def latest_snapshot(project_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return item, payload
 
 
+def latest_workspace_snapshots(project_id: str) -> list[dict[str, Any]]:
+    """Return only the newest snapshot for each user/device/workspace tuple."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id, s.project_id, s.project_name, s.user_id, s.device_id,
+                   s.workspace_name, s.observed_at, s.received_at,
+                   s.snapshot_type, s.payload_json
+            FROM snapshots s
+            INNER JOIN (
+                SELECT user_id, device_id, workspace_name, MAX(id) AS latest_id
+                FROM snapshots
+                WHERE project_id = ?
+                GROUP BY user_id, device_id, workspace_name
+            ) latest ON latest.latest_id = s.id
+            ORDER BY s.received_at DESC, s.id DESC
+            """,
+            (project_id,),
+        ).fetchall()
+    return [_snapshot_row(row) for row in rows]
+
+
+def project_rollup(project_id: str) -> dict[str, Any]:
+    snapshots = latest_workspace_snapshots(project_id)
+    if not snapshots:
+        raise HTTPException(status_code=404, detail="project snapshot not found")
+    events = recent_agent_events(project_id, 500)
+    return build_project_rollup(snapshots, events)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.6.0"}
+    return {"status": "ok", "version": "0.7.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -241,11 +280,7 @@ def ingest_agent_event(
     event: AgentEventIn,
     x_collector_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Receive structured activity from Codex/TRAE/Hermes/other coding agents.
-
-    This endpoint intentionally stores only structured task/progress/test/blocker data.
-    Agent chat transcripts are not required for the MVP.
-    """
+    """Receive structured activity from Codex/TRAE/Hermes/other coding agents."""
     require_collector_token(x_collector_token)
     received_at = now_utc()
     client_event_id = event.client_event_id or str(uuid.uuid4())
@@ -302,7 +337,25 @@ def list_projects() -> list[dict[str, Any]]:
         rows = conn.execute(
             "SELECT * FROM projects ORDER BY last_seen_at DESC, project_id ASC"
         ).fetchall()
-    return [dict(row) for row in rows]
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        rollup = project_rollup(str(item["project_id"]))
+        item.update(
+            {
+                "project_state": rollup.get("project_state"),
+                "project_state_label": rollup.get("project_state_label"),
+                "workspace_count": rollup.get("workspace_count", 0),
+                "contributor_count": rollup.get("contributor_count", 0),
+                "dirty_workspace_count": rollup.get("dirty_workspace_count", 0),
+                "attention_workspace_count": rollup.get("attention_workspace_count", 0),
+                "agents": rollup.get("agents", []),
+                "branches": rollup.get("branches", {}),
+            }
+        )
+        result.append(item)
+    return result
 
 
 @app.get("/api/v1/projects/{project_id}/snapshots")
@@ -322,13 +375,28 @@ def list_project_snapshots(
             """,
             (project_id, limit),
         ).fetchall()
+    return [_snapshot_row(row) for row in rows]
 
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        item["payload"] = json.loads(item.pop("payload_json"))
-        result.append(item)
-    return result
+
+@app.get("/api/v1/projects/{project_id}/workspaces")
+def list_project_workspaces(project_id: str) -> dict[str, Any]:
+    rollup = project_rollup(project_id)
+    return {
+        "project_id": project_id,
+        "workspace_count": rollup["workspace_count"],
+        "workspaces": rollup["workspaces"],
+    }
+
+
+@app.get("/api/v1/projects/{project_id}/contributors")
+def list_project_contributors(project_id: str) -> dict[str, Any]:
+    rollup = project_rollup(project_id)
+    return {
+        "project_id": project_id,
+        "contributor_count": rollup["contributor_count"],
+        "contributors": rollup["contributors"],
+        "agents": rollup["agents"],
+    }
 
 
 @app.get("/api/v1/projects/{project_id}/agent-events")
@@ -341,14 +409,26 @@ def list_project_agent_events(
 
 @app.get("/api/v1/projects/{project_id}/evidence")
 def get_project_evidence(project_id: str) -> dict[str, Any]:
-    _, payload = latest_snapshot(project_id)
+    primary, payload = latest_snapshot(project_id)
     events = recent_agent_events(project_id, 300)
-    return fuse_evidence(payload, events)
+    fusion = fuse_evidence(payload, events)
+    fusion["primary_workspace"] = {
+        "user_id": primary.get("user_id"),
+        "device_id": primary.get("device_id"),
+        "workspace_name": primary.get("workspace_name"),
+        "snapshot_id": primary.get("id"),
+    }
+    fusion["project_rollup"] = project_rollup(project_id)
+    fusion["scope_note"] = (
+        "任务级 Evidence Fusion 当前以最新工作区的项目资料/Git证据为主；"
+        "project_rollup 已汇总所有开发人员最新工作区，后续将继续做跨工作区任务级融合。"
+    )
+    return fusion
 
 
 @app.get("/api/v1/projects/{project_id}/current")
 def get_current_project(project_id: str) -> dict[str, Any]:
-    """Return the latest local workspace state, memory and evidence-fusion result."""
+    """Return project-level rollup plus the latest workspace's detailed evidence."""
     item, payload = latest_snapshot(project_id)
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
     events = recent_agent_events(project_id, 300)
@@ -360,4 +440,8 @@ def get_current_project(project_id: str) -> dict[str, Any]:
     item["current_project_memory"] = memory
     item["agent_events"] = events[-100:]
     item["evidence_fusion"] = fuse_evidence(payload, events)
+    item["project_rollup"] = project_rollup(project_id)
+    item["evidence_scope_note"] = (
+        "当前任务级证据融合仍以最新工作区为锚点；多人工作区状态已在 project_rollup 中完整保留。"
+    )
     return item
