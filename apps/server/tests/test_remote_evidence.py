@@ -75,3 +75,28 @@ def test_unmatched_remote_event_is_kept_unlinked():
     )
     assert result["work_items"][0]["status"] == "local_verified_pending_remote"
     assert len(result["unlinked_evidence"]["remote_events"]) == 1
+
+
+def test_pipeline_and_deploy_inherit_task_from_merge_request_sha_and_branch():
+    mr = _event("merge_request.merged")
+    mr["branch"] = "feature/tree-page"
+    mr["commit_sha"] = "merge-sha-1"
+    mr["data"]["source_branch"] = "feature/tree-page"
+
+    # Real GitLab pipeline/deployment rows often contain only ref/SHA and no task title.
+    pipeline = _event("ci.passed", task_id=None, title="")
+    pipeline["branch"] = "feature/tree-page"
+    pipeline["commit_sha"] = "merge-sha-1"
+    pipeline["data"] = {"ref": "feature/tree-page"}
+
+    deployment = _event("deployment.succeeded", task_id=None, title="")
+    deployment["branch"] = "feature/tree-page"
+    deployment["commit_sha"] = "merge-sha-1"
+    deployment["data"] = {"ref": "feature/tree-page", "environment": "test"}
+
+    result = apply_remote_evidence(_fusion(), [mr, pipeline, deployment])
+    item = result["work_items"][0]
+    assert item["status"] == "completed"
+    remote = [entry for entry in item["evidence"] if entry.get("source") == "remote_devops"]
+    assert len(remote) == 3
+    assert any(entry.get("linked_by") in {"sha", "branch"} for entry in remote)
