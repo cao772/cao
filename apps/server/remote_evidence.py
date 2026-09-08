@@ -107,7 +107,7 @@ def _kind(event_type: str) -> str:
     return "remote_other"
 
 
-def _remote_evidence(event: dict[str, Any], score: float) -> dict[str, Any]:
+def _remote_evidence(event: dict[str, Any], score: float, *, linked_by: str = "semantic") -> dict[str, Any]:
     return {
         "source": "remote_devops",
         "kind": _kind(str(event.get("event_type") or "")),
@@ -122,8 +122,27 @@ def _remote_evidence(event: dict[str, Any], score: float) -> dict[str, Any]:
         "remote_url": event.get("remote_url"),
         "task_id": event.get("task_id"),
         "match_score": round(score, 3),
+        "linked_by": linked_by,
         "data": event.get("data") or {},
     }
+
+
+def _association_keys(event: dict[str, Any]) -> list[tuple[str, str, str]]:
+    repository_id = str(event.get("repository_id") or "").strip()
+    if not repository_id:
+        return []
+    result: list[tuple[str, str, str]] = []
+    sha = str(event.get("commit_sha") or "").strip()
+    branch = str(event.get("branch") or "").strip()
+    data = event.get("data") or {}
+    source_branch = str(data.get("source_branch") or "").strip()
+    ref = str(data.get("ref") or "").strip()
+    if sha:
+        result.append((repository_id, "sha", sha))
+    for value in (branch, source_branch, ref):
+        if value:
+            result.append((repository_id, "branch", value))
+    return result
 
 
 def _derive_remote_status(item: dict[str, Any]) -> tuple[str | None, list[str]]:
@@ -162,9 +181,10 @@ def apply_remote_evidence(
 ) -> dict[str, Any]:
     """Attach GitHub/GitLab/DevLake facts to project-level tasks.
 
-    Remote evidence never replaces local evidence. It advances a task beyond the
-    local verification boundary only when explicit remote facts exist. Formal
-    `completed` requires CI pass + merge + deployment success.
+    The first matching pass uses explicit task_id/title semantics. A second pass
+    propagates that task identity through repository-local commit SHA or branch/ref.
+    This matters because CI/deployment records often contain only `sha`/`ref` while
+    the associated Merge Request carries the human-readable task title.
     """
     remote_events = remote_events or []
     result = dict(local_fusion)
@@ -173,14 +193,46 @@ def apply_remote_evidence(
         item["evidence"] = [dict(entry) for entry in (item.get("evidence") or [])]
         work_items[index] = item
 
-    unlinked: list[dict[str, Any]] = []
+    associations: dict[tuple[str, str, str], dict[str, Any]] = {}
+    pending: list[tuple[dict[str, Any], float]] = []
+
+    # First pass: explicit task ID or strong semantic match.
     for event in remote_events:
         target, score = _find_task(event, work_items)
-        evidence = _remote_evidence(event, score)
+        if target is None:
+            pending.append((event, score))
+            continue
+        target.setdefault("evidence", []).append(_remote_evidence(event, score, linked_by="task_or_semantic"))
+        for key in _association_keys(event):
+            associations[key] = target
+
+    # Build additional associations from already attached remote evidence. This also
+    # helps when two explicit events for the same task reveal different identifiers.
+    for item in work_items:
+        for evidence in item.get("evidence") or []:
+            if evidence.get("source") != "remote_devops":
+                continue
+            for key in _association_keys(evidence):
+                associations[key] = item
+
+    # Second pass: pipeline/deployment events can inherit the task from a matching
+    # commit SHA or branch/ref within the same repository.
+    unlinked: list[dict[str, Any]] = []
+    for event, score in pending:
+        target = None
+        linked_by = "unlinked"
+        for key in _association_keys(event):
+            if key in associations:
+                target = associations[key]
+                linked_by = key[1]
+                break
+        evidence = _remote_evidence(event, 0.95 if target is not None else score, linked_by=linked_by)
         if target is None:
             unlinked.append(evidence)
             continue
         target.setdefault("evidence", []).append(evidence)
+        for key in _association_keys(event):
+            associations[key] = target
 
     status_counts: Counter[str] = Counter()
     for item in work_items:
@@ -188,8 +240,8 @@ def apply_remote_evidence(
         if remote_status is not None:
             local_status = item.get("status")
             local_reasons = list(item.get("status_reasons") or [])
-            # Local blockers/test failures remain authoritative unless the remote
-            # evidence itself proves a later successful deployment lifecycle.
+            # Local blockers/test failures remain visible until a full later remote
+            # delivery lifecycle proves CI pass + merge + deployment success.
             if local_status in {"blocked", "test_failing"} and remote_status != "completed":
                 status = str(local_status)
                 reasons = local_reasons + remote_reasons
@@ -224,6 +276,9 @@ def apply_remote_evidence(
     summary = dict(local_fusion.get("summary") or {})
     summary["remote_event_count"] = len(remote_events)
     summary["unlinked_remote_event_count"] = len(unlinked)
+    summary["remote_repository_count"] = len(
+        {str(event.get("repository_id")) for event in remote_events if event.get("repository_id")}
+    )
     summary["status_counts"] = dict(status_counts)
     summary["completed_work_item_count"] = status_counts["completed"]
 
