@@ -68,6 +68,12 @@
           "type": "string",
           "minLength": 1
         },
+        "local_path": {
+          "type": "string",
+          "minLength": 1,
+          "default": ".",
+          "description": "Path to the canonical Git repository relative to the managed project folder. Use when the project root is a document/version-management workspace and the Git repo is nested."
+        },
         "development_branches": {
           "type": "array",
           "items": {
