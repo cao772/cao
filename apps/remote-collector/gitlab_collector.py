@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -23,7 +23,8 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 INITIAL_LOOKBACK_HOURS = int(os.getenv("INITIAL_LOOKBACK_HOURS", "24"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
-COLLECTOR_VERSION = "0.1.0"
+MAX_PAGES = int(os.getenv("GITLAB_MAX_PAGES", "20"))
+COLLECTOR_VERSION = "0.2.0"
 TASK_ID_RE = re.compile(r"\b([A-Z][A-Z0-9_]{1,20}-\d+)\b")
 
 
@@ -91,6 +92,22 @@ def gitlab_get(path: str, params: dict[str, Any] | None = None) -> Any:
     )
     with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def gitlab_get_all(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Fetch list endpoints across pages without depending on response headers."""
+    base = dict(params or {})
+    per_page = min(int(base.get("per_page") or 100), 100)
+    base["per_page"] = per_page
+    result: list[dict[str, Any]] = []
+    for page in range(1, max(MAX_PAGES, 1) + 1):
+        rows = gitlab_get(path, {**base, "page": page})
+        if not isinstance(rows, list) or not rows:
+            break
+        result.extend(item for item in rows if isinstance(item, dict))
+        if len(rows) < per_page:
+            break
+    return result
 
 
 def central_post(event: dict[str, Any]) -> bool:
@@ -168,6 +185,39 @@ def normalize_commit(project: dict[str, Any], repository: dict[str, Any], item: 
     return base
 
 
+def normalize_push_event(project: dict[str, Any], repository: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    push = item.get("push_data") or {}
+    title = str(push.get("commit_title") or "").strip()
+    ref = str(push.get("ref") or "").strip()
+    commit_to = str(push.get("commit_to") or "").strip()
+    source_id = str(item.get("id") or "")
+    observed = item.get("created_at") or utc_now()
+    author = item.get("author") or {}
+    base = _base_event(project, repository)
+    base.update(
+        {
+            "client_event_id": _event_id(repository["id"], "push", source_id or f"{commit_to}:{ref}:{observed}"),
+            "event_type": "git.push",
+            "observed_at": observed,
+            "branch": ref or None,
+            "commit_sha": commit_to or None,
+            "remote_url": None,
+            "task_id": _task_id(title, ref),
+            "task_title": title or ref or None,
+            "data": {
+                "title": title,
+                "ref": ref,
+                "ref_type": push.get("ref_type"),
+                "commit_from": push.get("commit_from"),
+                "commit_to": push.get("commit_to"),
+                "commit_count": push.get("commit_count"),
+                "author": item.get("author_username") or (author.get("username") if isinstance(author, dict) else None),
+            },
+        }
+    )
+    return base
+
+
 def normalize_merge_request(project: dict[str, Any], repository: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     state = str(item.get("state") or "opened").lower()
     merged_at = item.get("merged_at")
@@ -205,8 +255,10 @@ def normalize_pipeline(project: dict[str, Any], repository: dict[str, Any], item
     status = str(item.get("status") or "").lower()
     if status == "success":
         event_type = "ci.passed"
-    elif status in {"failed", "canceled", "skipped", "manual"}:
-        event_type = "ci.failed" if status == "failed" else "ci.finished"
+    elif status == "failed":
+        event_type = "ci.failed"
+    elif status in {"canceled", "skipped", "manual"}:
+        event_type = "ci.finished"
     else:
         event_type = "ci.running"
     pipeline_id = str(item.get("id") or "")
@@ -279,6 +331,31 @@ def _encoded_project(repository: dict[str, Any]) -> str:
     return urllib.parse.quote(path, safe="")
 
 
+def _collect_endpoint(
+    *,
+    project: dict[str, Any],
+    repository: dict[str, Any],
+    path: str,
+    params: dict[str, Any],
+    normalizer: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]],
+    newest: datetime,
+) -> tuple[int, datetime]:
+    emitted = 0
+    try:
+        rows = gitlab_get_all(path, params)
+    except urllib.error.HTTPError as exc:
+        print(json.dumps({"level": "warning", "repository": repository.get("id"), "path": path, "status": exc.code}, ensure_ascii=False))
+        return 0, newest
+    for row in rows:
+        event = normalizer(project, repository, row)
+        observed = _parse_time(str(event.get("observed_at") or ""))
+        if observed and observed > newest:
+            newest = observed
+        if central_post(event):
+            emitted += 1
+    return emitted, newest
+
+
 def collect_repository(
     project: dict[str, Any],
     repository: dict[str, Any],
@@ -290,6 +367,11 @@ def collect_repository(
     newest = since
 
     endpoints = [
+        (
+            f"projects/{encoded}/events",
+            {"action": "pushed", "after": since.date().isoformat(), "per_page": 100},
+            normalize_push_event,
+        ),
         (f"projects/{encoded}/repository/commits", {"since": since_iso, "per_page": 100}, normalize_commit),
         (f"projects/{encoded}/merge_requests", {"scope": "all", "updated_after": since_iso, "per_page": 100}, normalize_merge_request),
         (f"projects/{encoded}/pipelines", {"updated_after": since_iso, "per_page": 100}, normalize_pipeline),
@@ -297,24 +379,15 @@ def collect_repository(
     ]
 
     for path, params, normalizer in endpoints:
-        try:
-            rows = gitlab_get(path, params)
-        except urllib.error.HTTPError as exc:
-            # Some GitLab editions may not expose deployments or may reject a
-            # filter parameter. Keep the other evidence classes usable.
-            print(json.dumps({"level": "warning", "repository": repository.get("id"), "path": path, "status": exc.code}, ensure_ascii=False))
-            continue
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            event = normalizer(project, repository, row)
-            observed = _parse_time(str(event.get("observed_at") or ""))
-            if observed and observed > newest:
-                newest = observed
-            if central_post(event):
-                emitted += 1
+        count, newest = _collect_endpoint(
+            project=project,
+            repository=repository,
+            path=path,
+            params=params,
+            normalizer=normalizer,
+            newest=newest,
+        )
+        emitted += count
     return emitted, newest
 
 
@@ -336,8 +409,6 @@ def scan_once() -> dict[str, Any]:
                 continue
             previous = _parse_time((repo_state.get(repository_id) or {}).get("last_successful_at"))
             since = previous or (datetime.now(timezone.utc) - timedelta(hours=INITIAL_LOOKBACK_HOURS))
-            # Small overlap protects against timestamp ordering and clock skew. Events
-            # are idempotent at the central API through client_event_id.
             since -= timedelta(minutes=2)
             try:
                 emitted, newest = collect_repository(project, repository, since)
