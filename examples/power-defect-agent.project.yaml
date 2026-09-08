@@ -7,20 +7,21 @@ project:
   team: ai-project
 
 repository:
-  provider: github
-  url: https://github.com/cao772/multimodal-agent.git
+  id: multimodal-agent
+  role: application
+  provider: gitlab
+  url: http://git.hyetec.com/hyetec/rj26nw025/multimodal-agent.git
   default_branch: cyh
+  local_path: .
   development_branches:
     - cyh
 
 paths:
-  # 代码只用于 Git/代码变化分析，不在第一阶段做全量正文上送。
   code:
     - backend
     - defect_image_exporter_release_v0.1.1
     - power-defect-disposal-skill
 
-  # 真实项目资料大量直接放在项目根目录，因此支持 glob。
   documents:
     - README.md
     - SKILL.md
@@ -39,28 +40,19 @@ paths:
     - outputs
 
 ignore:
-  # macOS / Office / IDE 临时文件
   - __MACOSX
   - .DS_Store
   - '.~*'
   - '~$*'
   - .idea
-
-  # 浏览器回放、临时制表脚本及其截图，不作为项目主资料
   - .playwright-cli
   - .work_feature_list
-
-  # 数据样本和图片规模较大；第一阶段只通过 Git/目录状态感知，不做全文分析
   - data/demo/images
   - '*.jpg'
   - '*.jpeg'
   - '*.png'
   - '*.mp4'
-
-  # 本交接包里包含一份旧的/重复的 handoff v2，保留在磁盘但不进入当前视图。
   - power_defect_agent_handoff_v2
-
-  # 与当前缺陷项目无关的低电压 Docker 替换包。
   - lowvoltage_cyh_docker_replace_de14133_20260822
 
 security:
