@@ -11,11 +11,12 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from project_memory import enrich_snapshot_payload
+from workspace_inventory import build_workspace_inventory
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.3.0")
+app = FastAPI(title="AI Dev Management API", version="0.4.0")
 
 
 class SnapshotIn(BaseModel):
@@ -91,7 +92,7 @@ def require_collector_token(x_collector_token: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.3.0"}
+    return {"status": "ok", "version": "0.4.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -102,6 +103,9 @@ def ingest_snapshot(
     require_collector_token(x_collector_token)
     received_at = now_utc()
     payload = enrich_snapshot_payload(snapshot.model_dump())
+    payload["workspace_inventory"] = build_workspace_inventory(
+        list((payload.get("files") or {}).get("files") or [])
+    )
 
     with get_db() as conn:
         cursor = conn.execute(
@@ -208,5 +212,6 @@ def get_current_project(project_id: str) -> dict[str, Any]:
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
     item["git"] = payload.get("git") or {}
     item["analysis_stats"] = (payload.get("analysis") or {}).get("stats") or {}
+    item["workspace_inventory"] = payload.get("workspace_inventory") or {}
     item["current_project_memory"] = memory
     return item
