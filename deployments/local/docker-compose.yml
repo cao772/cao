@@ -6,10 +6,10 @@ services:
     environment:
       PROJECTS_ROOT: /projects
       CENTRAL_URL: ${CENTRAL_URL:-http://host.docker.internal:8080}
-      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:-change-me}
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:?set COLLECTOR_TOKEN}
       INTERVAL_SECONDS: ${INTERVAL_SECONDS:-900}
       USER_ID: ${USER_ID:-developer}
       DEVICE_ID: ${DEVICE_ID:-local-device}
     volumes:
-      - ${PROJECTS_PATH:-~/projects}:/projects:ro
+      - ${PROJECTS_PATH:?set PROJECTS_PATH to an absolute host path}:/projects:ro
     restart: unless-stopped
