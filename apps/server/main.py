@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.1.0")
+app = FastAPI(title="AI Dev Management API", version="0.2.0")
 
 
 class SnapshotIn(BaseModel):
@@ -29,6 +29,7 @@ class SnapshotIn(BaseModel):
     security_mode: str
     git: dict[str, Any]
     files: dict[str, Any] = Field(default_factory=dict)
+    analysis: dict[str, Any] = Field(default_factory=dict)
 
 
 def now_utc() -> str:
@@ -88,7 +89,7 @@ def require_collector_token(x_collector_token: str | None) -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.post("/api/v1/snapshots")

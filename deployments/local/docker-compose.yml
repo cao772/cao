@@ -5,11 +5,21 @@ services:
       dockerfile: apps/local-sentinel/Dockerfile
     environment:
       PROJECTS_ROOT: /projects
-      CENTRAL_URL: ${CENTRAL_URL:-http://host.docker.internal:8080}
-      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:?set COLLECTOR_TOKEN}
+      SENTINEL_STATE_ROOT: /state
+      CENTRAL_URL: ${CENTRAL_URL}
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN}
       INTERVAL_SECONDS: ${INTERVAL_SECONDS:-900}
       USER_ID: ${USER_ID:-developer}
       DEVICE_ID: ${DEVICE_ID:-local-device}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-60}
+      ALLOW_REMOTE_ANALYSIS_ENDPOINT: ${ALLOW_REMOTE_ANALYSIS_ENDPOINT:-false}
     volumes:
-      - ${PROJECTS_PATH:?set PROJECTS_PATH to an absolute host path}:/projects:ro
+      - ${PROJECTS_PATH:?set PROJECTS_PATH}:/projects:ro
+      - sentinel-state:/state
     restart: unless-stopped
+
+volumes:
+  sentinel-state:

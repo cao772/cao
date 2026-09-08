@@ -39,9 +39,24 @@ ignore:
   - data/raw
 
 security:
+  # metadata_only 不读正文；要启用本机资料分析时改为 local_analysis。
   mode: metadata_only
   upload_source_code: false
   upload_documents: false
+
+analysis:
+  enabled: true
+  # 默认不读源码正文；只有显式加入 code 才会解析代码文件。
+  include:
+    - documents
+    - tests
+    - outputs
+  use_llm: false
+  max_file_bytes: 8388608
+  max_text_chars: 40000
+  max_items: 500
+  xlsx_rows_per_sheet: 200
+  xlsx_columns: 30
 
 progress:
   sources:

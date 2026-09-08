@@ -8,29 +8,22 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
+from document_pipeline import analyze_project_files, is_sensitive_path
+
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
+STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
 CENTRAL_URL = os.getenv("CENTRAL_URL", "").rstrip("/")
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "900"))
 USER_ID = os.getenv("USER_ID", os.getenv("USER", "unknown"))
 DEVICE_ID = os.getenv("DEVICE_ID", socket.gethostname())
-SENTINEL_VERSION = "0.1.0"
-
-SENSITIVE_NAMES = {
-    ".env",
-    ".env.local",
-    ".env.production",
-    "id_rsa",
-    "id_ed25519",
-}
-SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+SENTINEL_VERSION = "0.2.0"
 
 
 def utc_now() -> str:
@@ -91,7 +84,6 @@ def git_snapshot(repo: Path) -> dict[str, Any]:
         counts[kind] += 1
         changed.append({"status": code, "kind": kind, "path": path})
 
-    # 只采集统计，不上传 patch 正文。
     _, diff_numstat = run_git(repo, "diff", "HEAD", "--numstat")
     added_lines = deleted_lines = 0
     for line in diff_numstat.splitlines():
@@ -114,6 +106,14 @@ def git_snapshot(repo: Path) -> dict[str, Any]:
     }
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while chunk := fh.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def safe_file_metadata(path: Path, project_root: Path) -> dict[str, Any] | None:
     try:
         relative = path.relative_to(project_root).as_posix()
@@ -121,17 +121,11 @@ def safe_file_metadata(path: Path, project_root: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
 
-    if path.name in SENSITIVE_NAMES or path.suffix.lower() in SENSITIVE_SUFFIXES:
+    if is_sensitive_path(path, project_root):
         return {"path": relative, "sensitive": True}
 
-    digest = hashlib.sha256()
     try:
-        with path.open("rb") as fh:
-            while True:
-                chunk = fh.read(1024 * 1024)
-                if not chunk:
-                    break
-                digest.update(chunk)
+        digest = file_sha256(path)
     except OSError:
         return None
 
@@ -139,38 +133,50 @@ def safe_file_metadata(path: Path, project_root: Path) -> dict[str, Any] | None:
         "path": relative,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
-        "sha256": digest.hexdigest(),
+        "sha256": digest,
         "suffix": path.suffix.lower(),
     }
 
 
-def manifest_metadata(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    """Collect metadata only for explicitly declared document/output roots.
+def expand_path(project_root: Path, raw: str) -> Iterable[Path]:
+    has_glob = any(ch in raw for ch in "*?[")
+    candidates = list(project_root.glob(raw)) if has_glob else [project_root / raw]
+    for candidate in candidates:
+        if candidate.is_file():
+            yield candidate
+        elif candidate.is_dir():
+            yield from (item for item in candidate.rglob("*") if item.is_file())
 
-    Phase 1 intentionally does not read file bodies.
-    """
+
+def manifest_metadata(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Collect only metadata from declared document/test/output roots."""
     items: list[dict[str, Any]] = []
     configured = manifest.get("paths") or {}
-    roots = list(configured.get("documents") or []) + list(configured.get("outputs") or [])
+    roots = (
+        list(configured.get("documents") or [])
+        + list(configured.get("tests") or [])
+        + list(configured.get("outputs") or [])
+    )
 
+    seen: set[str] = set()
     for raw in roots:
-        candidate = project_root / raw
-        if candidate.is_file():
-            meta = safe_file_metadata(candidate, project_root)
+        for file_path in expand_path(project_root, raw):
+            if ".git" in file_path.parts:
+                continue
+            try:
+                relative = file_path.relative_to(project_root).as_posix()
+            except ValueError:
+                continue
+            if relative in seen:
+                continue
+            seen.add(relative)
+            meta = safe_file_metadata(file_path, project_root)
             if meta:
                 items.append(meta)
-        elif candidate.is_dir():
-            for file_path in candidate.rglob("*"):
-                if file_path.is_file() and ".git" not in file_path.parts:
-                    meta = safe_file_metadata(file_path, project_root)
-                    if meta:
-                        items.append(meta)
-                        if len(items) >= 2000:
-                            break
-        if len(items) >= 2000:
-            break
+            if len(items) >= 2000:
+                return {"files": items, "truncated": True}
 
-    return {"files": items, "truncated": len(items) >= 2000}
+    return {"files": items, "truncated": False}
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -197,7 +203,7 @@ def discover_projects() -> list[tuple[Path, dict[str, Any]]]:
             continue
         try:
             discovered.append((child, load_manifest(manifest_path)))
-        except Exception as exc:  # noqa: BLE001 - collector must continue scanning other projects
+        except Exception as exc:
             print(json.dumps({"level": "error", "project": child.name, "error": str(exc)}, ensure_ascii=False))
     return discovered
 
@@ -217,10 +223,11 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "collector": {"name": "project-sentinel", "version": SENTINEL_VERSION},
         "security_mode": security.get("mode", "metadata_only"),
         "git": git_snapshot(project_root),
+        "files": manifest_metadata(project_root, manifest),
     }
 
-    # 第一版无论配置为何都只采集 metadata；内容分析留到后续显式实现。
-    snapshot["files"] = manifest_metadata(project_root, manifest)
+    # metadata_only 不读取正文；local_analysis 才进入增量文档解析与本地分析。
+    snapshot["analysis"] = analyze_project_files(project_root, manifest, STATE_ROOT)
     return snapshot
 
 
@@ -230,7 +237,10 @@ def upload_snapshot(snapshot: dict[str, Any]) -> bool:
         return True
 
     body = json.dumps(snapshot, ensure_ascii=False).encode("utf-8")
-    headers = {"Content-Type": "application/json", "User-Agent": f"project-sentinel/{SENTINEL_VERSION}"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": f"project-sentinel/{SENTINEL_VERSION}",
+    }
     if COLLECTOR_TOKEN:
         headers["X-Collector-Token"] = COLLECTOR_TOKEN
 
@@ -257,12 +267,14 @@ def scan_once() -> int:
 
 
 def main() -> None:
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
     print(
         json.dumps(
             {
                 "service": "project-sentinel",
                 "version": SENTINEL_VERSION,
                 "projects_root": str(PROJECTS_ROOT),
+                "state_root": str(STATE_ROOT),
                 "interval_seconds": INTERVAL_SECONDS,
                 "central_enabled": bool(CENTRAL_URL),
             },
@@ -273,7 +285,7 @@ def main() -> None:
         try:
             count = scan_once()
             print(json.dumps({"level": "info", "projects_scanned": count, "at": utc_now()}, ensure_ascii=False))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(json.dumps({"level": "error", "error": str(exc), "at": utc_now()}, ensure_ascii=False))
         time.sleep(max(INTERVAL_SECONDS, 10))
 

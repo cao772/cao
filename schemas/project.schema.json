@@ -3,59 +3,222 @@
   "$id": "https://example.local/schemas/project.schema.json",
   "title": "AI Dev Management Project Manifest",
   "type": "object",
-  "required": ["version", "project", "repository", "paths", "security", "progress"],
+  "required": [
+    "version",
+    "project",
+    "repository",
+    "paths",
+    "security",
+    "progress"
+  ],
   "properties": {
-    "version": {"const": 1},
+    "version": {
+      "const": 1
+    },
     "project": {
       "type": "object",
-      "required": ["id", "name", "owner", "team"],
+      "required": [
+        "id",
+        "name",
+        "owner",
+        "team"
+      ],
       "properties": {
-        "id": {"type": "string", "minLength": 1, "pattern": "^[a-zA-Z0-9._-]+$"},
-        "name": {"type": "string", "minLength": 1},
-        "owner": {"type": "string", "minLength": 1},
-        "team": {"type": "string", "minLength": 1}
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9._-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "team": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "additionalProperties": true
     },
     "repository": {
       "type": "object",
-      "required": ["provider", "url", "default_branch"],
+      "required": [
+        "provider",
+        "url",
+        "default_branch"
+      ],
       "properties": {
-        "provider": {"enum": ["github", "gitlab", "gitea", "other"]},
-        "url": {"type": "string", "minLength": 1},
-        "default_branch": {"type": "string", "minLength": 1},
-        "development_branches": {"type": "array", "items": {"type": "string"}}
+        "provider": {
+          "enum": [
+            "github",
+            "gitlab",
+            "gitea",
+            "other"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "default_branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "development_branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       },
       "additionalProperties": true
     },
     "paths": {
       "type": "object",
       "properties": {
-        "code": {"type": "array", "items": {"type": "string"}, "default": []},
-        "documents": {"type": "array", "items": {"type": "string"}, "default": []},
-        "tests": {"type": "array", "items": {"type": "string"}, "default": []},
-        "outputs": {"type": "array", "items": {"type": "string"}, "default": []}
+        "code": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
       },
       "additionalProperties": true
     },
-    "ignore": {"type": "array", "items": {"type": "string"}, "default": []},
+    "ignore": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
     "security": {
       "type": "object",
-      "required": ["mode"],
+      "required": [
+        "mode"
+      ],
       "properties": {
-        "mode": {"enum": ["metadata_only", "local_analysis", "central_analysis"]},
-        "upload_source_code": {"type": "boolean", "default": false},
-        "upload_documents": {"type": "boolean", "default": false}
+        "mode": {
+          "enum": [
+            "metadata_only",
+            "local_analysis",
+            "central_analysis"
+          ]
+        },
+        "upload_source_code": {
+          "type": "boolean",
+          "default": false
+        },
+        "upload_documents": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "analysis": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "documents",
+              "tests",
+              "outputs",
+              "code"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "documents",
+            "tests",
+            "outputs"
+          ]
+        },
+        "use_llm": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 8388608
+        },
+        "max_text_chars": {
+          "type": "integer",
+          "minimum": 1000,
+          "default": 40000
+        },
+        "max_items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "default": 500
+        },
+        "xlsx_rows_per_sheet": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 200
+        },
+        "xlsx_columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 30
+        }
       },
       "additionalProperties": true
     },
     "progress": {
       "type": "object",
-      "required": ["sources"],
+      "required": [
+        "sources"
+      ],
       "properties": {
         "sources": {
           "type": "array",
-          "items": {"enum": ["git", "tests", "local_workspace", "tasks", "agent", "ci"]},
+          "items": {
+            "enum": [
+              "git",
+              "tests",
+              "local_workspace",
+              "tasks",
+              "agent",
+              "ci"
+            ]
+          },
           "minItems": 1,
           "uniqueItems": true
         }
