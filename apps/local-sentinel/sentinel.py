@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 import yaml
 
-from document_pipeline import analyze_project_files, is_sensitive_path
+from document_pipeline import analyze_project_files, is_ignored, is_sensitive_path
 
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
 STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
@@ -23,7 +23,7 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "900"))
 USER_ID = os.getenv("USER_ID", os.getenv("USER", "unknown"))
 DEVICE_ID = os.getenv("DEVICE_ID", socket.gethostname())
-SENTINEL_VERSION = "0.2.0"
+SENTINEL_VERSION = "0.3.0"
 
 
 def utc_now() -> str:
@@ -44,9 +44,45 @@ def run_git(repo: Path, *args: str) -> tuple[int, str]:
         return 1, ""
 
 
-def git_snapshot(repo: Path) -> dict[str, Any]:
+def resolve_git_root(project_root: Path, manifest: dict[str, Any]) -> tuple[Path | None, str]:
+    """Resolve the canonical repository path declared by project.yaml.
+
+    Many real project folders are management workspaces, not Git repositories themselves.
+    `repository.local_path` lets the project root contain documents, historical copies and
+    handoff packages while Git inspection is anchored to one canonical nested repository.
+    The path is always constrained to stay inside the project root.
+    """
+    repository = manifest.get("repository") or {}
+    raw = str(repository.get("local_path") or ".").strip() or "."
+    project_resolved = project_root.resolve()
+    candidate = (project_root / raw).resolve() if raw not in {".", "./"} else project_resolved
+    try:
+        relative = candidate.relative_to(project_resolved).as_posix() or "."
+    except ValueError:
+        return None, raw
+    return candidate, relative
+
+
+def git_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    repo, repository_path = resolve_git_root(project_root, manifest)
+    if repo is None:
+        return {
+            "is_git_repo": False,
+            "repository_path": repository_path,
+            "reason": "repository.local_path escapes project root",
+        }
+    if not repo.exists():
+        return {
+            "is_git_repo": False,
+            "repository_path": repository_path,
+            "reason": "declared repository.local_path does not exist",
+        }
     if not (repo / ".git").exists():
-        return {"is_git_repo": False}
+        return {
+            "is_git_repo": False,
+            "repository_path": repository_path,
+            "reason": "declared repository path has no .git",
+        }
 
     _, branch = run_git(repo, "branch", "--show-current")
     _, head = run_git(repo, "rev-parse", "HEAD")
@@ -94,6 +130,7 @@ def git_snapshot(repo: Path) -> dict[str, Any]:
 
     return {
         "is_git_repo": True,
+        "repository_path": repository_path,
         "branch": branch or None,
         "head": head or None,
         "upstream": upstream if upstream_code == 0 else None,
@@ -157,6 +194,7 @@ def manifest_metadata(project_root: Path, manifest: dict[str, Any]) -> dict[str,
         + list(configured.get("tests") or [])
         + list(configured.get("outputs") or [])
     )
+    ignore = list(manifest.get("ignore") or [])
 
     seen: set[str] = set()
     for raw in roots:
@@ -167,7 +205,7 @@ def manifest_metadata(project_root: Path, manifest: dict[str, Any]) -> dict[str,
                 relative = file_path.relative_to(project_root).as_posix()
             except ValueError:
                 continue
-            if relative in seen:
+            if relative in seen or is_ignored(relative, ignore):
                 continue
             seen.add(relative)
             meta = safe_file_metadata(file_path, project_root)
@@ -222,7 +260,7 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "workspace_name": project_root.name,
         "collector": {"name": "project-sentinel", "version": SENTINEL_VERSION},
         "security_mode": security.get("mode", "metadata_only"),
-        "git": git_snapshot(project_root),
+        "git": git_snapshot(project_root, manifest),
         "files": manifest_metadata(project_root, manifest),
     }
 
