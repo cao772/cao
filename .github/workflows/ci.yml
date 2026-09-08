@@ -26,6 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r apps/local-sentinel/requirements.txt
           pip install -r apps/server/requirements.txt
+          pip install -r apps/remote-collector/requirements.txt
           pip install pytest
 
       - name: Compile Python
@@ -33,5 +34,11 @@ jobs:
 
       - name: Run tests
         env:
-          PYTHONPATH: apps/local-sentinel:apps/server
-        run: python -m pytest -q apps/local-sentinel/tests apps/server/tests
+          PYTHONPATH: apps/local-sentinel:apps/server:apps/remote-collector
+        run: python -m pytest -q apps/local-sentinel/tests apps/server/tests apps/remote-collector/tests
+
+      - name: Build containers
+        run: |
+          docker build -f apps/local-sentinel/Dockerfile -t ai-dev-sentinel:test .
+          docker build -f apps/server/Dockerfile -t ai-dev-server:test .
+          docker build -f apps/remote-collector/Dockerfile -t ai-dev-gitlab-collector:test .
