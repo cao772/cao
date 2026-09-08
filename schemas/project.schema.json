@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/project.schema.json",
+  "title": "AI Dev Management Project Manifest",
+  "type": "object",
+  "required": ["version", "project", "repository", "paths", "security", "progress"],
+  "properties": {
+    "version": {"const": 1},
+    "project": {
+      "type": "object",
+      "required": ["id", "name", "owner", "team"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "pattern": "^[a-zA-Z0-9._-]+$"},
+        "name": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "team": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "repository": {
+      "type": "object",
+      "required": ["provider", "url", "default_branch"],
+      "properties": {
+        "provider": {"enum": ["github", "gitlab", "gitea", "other"]},
+        "url": {"type": "string", "minLength": 1},
+        "default_branch": {"type": "string", "minLength": 1},
+        "development_branches": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "paths": {
+      "type": "object",
+      "properties": {
+        "code": {"type": "array", "items": {"type": "string"}, "default": []},
+        "documents": {"type": "array", "items": {"type": "string"}, "default": []},
+        "tests": {"type": "array", "items": {"type": "string"}, "default": []},
+        "outputs": {"type": "array", "items": {"type": "string"}, "default": []}
+      },
+      "additionalProperties": true
+    },
+    "ignore": {"type": "array", "items": {"type": "string"}, "default": []},
+    "security": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["metadata_only", "local_analysis", "central_analysis"]},
+        "upload_source_code": {"type": "boolean", "default": false},
+        "upload_documents": {"type": "boolean", "default": false}
+      },
+      "additionalProperties": true
+    },
+    "progress": {
+      "type": "object",
+      "required": ["sources"],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {"enum": ["git", "tests", "local_workspace", "tasks", "agent", "ci"]},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

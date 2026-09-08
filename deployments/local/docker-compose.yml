@@ -1,0 +1,15 @@
+services:
+  sentinel:
+    build:
+      context: ../..
+      dockerfile: apps/local-sentinel/Dockerfile
+    environment:
+      PROJECTS_ROOT: /projects
+      CENTRAL_URL: ${CENTRAL_URL:-http://host.docker.internal:8080}
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:-change-me}
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-900}
+      USER_ID: ${USER_ID:-developer}
+      DEVICE_ID: ${DEVICE_ID:-local-device}
+    volumes:
+      - ${PROJECTS_PATH:-~/projects}:/projects:ro
+    restart: unless-stopped

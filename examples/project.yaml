@@ -1,0 +1,51 @@
+version: 1
+
+project:
+  id: low-voltage
+  name: 低电压精准立项资料审核智能体
+  owner: caoyh
+  team: ai-project
+
+repository:
+  provider: github
+  url: https://github.com/example/low-voltage.git
+  default_branch: main
+  development_branches:
+    - cao
+    - cyh
+    - ryj
+
+paths:
+  code:
+    - app
+    - frontend
+  documents:
+    - docs
+    - requirements
+  tests:
+    - tests
+  outputs:
+    - output
+    - reports
+
+ignore:
+  - node_modules
+  - .venv
+  - dist
+  - build
+  - __pycache__
+  - '*.zip'
+  - '*.7z'
+  - data/raw
+
+security:
+  mode: metadata_only
+  upload_source_code: false
+  upload_documents: false
+
+progress:
+  sources:
+    - git
+    - tests
+    - local_workspace
+    - tasks
