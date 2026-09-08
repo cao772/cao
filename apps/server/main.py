@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,13 +11,14 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from evidence_fusion import fuse_evidence
 from project_memory import enrich_snapshot_payload
 from workspace_inventory import build_workspace_inventory
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.5.0")
+app = FastAPI(title="AI Dev Management API", version="0.6.0")
 
 
 class SnapshotIn(BaseModel):
@@ -34,6 +36,20 @@ class SnapshotIn(BaseModel):
     files: dict[str, Any] = Field(default_factory=dict)
     analysis: dict[str, Any] = Field(default_factory=dict)
     git_change_analysis: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentEventIn(BaseModel):
+    schema_version: int = 1
+    client_event_id: str | None = None
+    event_type: str = Field(min_length=1, max_length=120)
+    observed_at: str
+    project_id: str = Field(min_length=1, max_length=200)
+    user_id: str = Field(min_length=1, max_length=200)
+    agent: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = Field(default=None, max_length=300)
+    task_id: str | None = Field(default=None, max_length=300)
+    task_title: str | None = Field(default=None, max_length=1000)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 def now_utc() -> str:
@@ -77,6 +93,26 @@ def init_db() -> None:
                 ON snapshots(project_id, id DESC);
             CREATE INDEX IF NOT EXISTS idx_snapshots_observed_at
                 ON snapshots(observed_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_event_id TEXT UNIQUE,
+                project_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                agent_json TEXT NOT NULL,
+                session_id TEXT,
+                task_id TEXT,
+                task_title TEXT,
+                data_json TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_events_project_id_id
+                ON agent_events(project_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_agent_events_project_task
+                ON agent_events(project_id, task_id, id DESC);
             """
         )
 
@@ -91,9 +127,55 @@ def require_collector_token(x_collector_token: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid collector token")
 
 
+def _agent_event_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["agent"] = json.loads(item.pop("agent_json"))
+    item["data"] = json.loads(item.pop("data_json"))
+    return item
+
+
+def recent_agent_events(project_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, client_event_id, project_id, user_id, event_type,
+                   observed_at, received_at, agent_json, session_id,
+                   task_id, task_title, data_json
+            FROM agent_events
+            WHERE project_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (project_id, limit),
+        ).fetchall()
+    return [_agent_event_row(row) for row in reversed(rows)]
+
+
+def latest_snapshot(project_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, project_id, project_name, user_id, device_id, workspace_name,
+                   observed_at, received_at, snapshot_type, payload_json
+            FROM snapshots
+            WHERE project_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="project snapshot not found")
+
+    item = dict(row)
+    payload = json.loads(item.pop("payload_json"))
+    return item, payload
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.5.0"}
+    return {"status": "ok", "version": "0.6.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -154,6 +236,66 @@ def ingest_snapshot(
     return {"accepted": True, "snapshot_id": cursor.lastrowid, "received_at": received_at}
 
 
+@app.post("/api/v1/agent-events")
+def ingest_agent_event(
+    event: AgentEventIn,
+    x_collector_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Receive structured activity from Codex/TRAE/Hermes/other coding agents.
+
+    This endpoint intentionally stores only structured task/progress/test/blocker data.
+    Agent chat transcripts are not required for the MVP.
+    """
+    require_collector_token(x_collector_token)
+    received_at = now_utc()
+    client_event_id = event.client_event_id or str(uuid.uuid4())
+
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id, received_at FROM agent_events WHERE client_event_id = ?",
+            (client_event_id,),
+        ).fetchone()
+        if existing is not None:
+            return {
+                "accepted": True,
+                "duplicate": True,
+                "event_id": existing["id"],
+                "client_event_id": client_event_id,
+                "received_at": existing["received_at"],
+            }
+
+        cursor = conn.execute(
+            """
+            INSERT INTO agent_events (
+                client_event_id, project_id, user_id, event_type,
+                observed_at, received_at, agent_json, session_id,
+                task_id, task_title, data_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                client_event_id,
+                event.project_id,
+                event.user_id,
+                event.event_type,
+                event.observed_at,
+                received_at,
+                json.dumps(event.agent, ensure_ascii=False),
+                event.session_id,
+                event.task_id,
+                event.task_title,
+                json.dumps(event.data, ensure_ascii=False),
+            ),
+        )
+
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "event_id": cursor.lastrowid,
+        "client_event_id": client_event_id,
+        "received_at": received_at,
+    }
+
+
 @app.get("/api/v1/projects")
 def list_projects() -> list[dict[str, Any]]:
     with get_db() as conn:
@@ -189,31 +331,33 @@ def list_project_snapshots(
     return result
 
 
+@app.get("/api/v1/projects/{project_id}/agent-events")
+def list_project_agent_events(
+    project_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict[str, Any]]:
+    return recent_agent_events(project_id, limit)
+
+
+@app.get("/api/v1/projects/{project_id}/evidence")
+def get_project_evidence(project_id: str) -> dict[str, Any]:
+    _, payload = latest_snapshot(project_id)
+    events = recent_agent_events(project_id, 300)
+    return fuse_evidence(payload, events)
+
+
 @app.get("/api/v1/projects/{project_id}/current")
 def get_current_project(project_id: str) -> dict[str, Any]:
-    """Return the latest local workspace snapshot plus its fused current-view memory."""
-    with get_db() as conn:
-        row = conn.execute(
-            """
-            SELECT id, project_id, project_name, user_id, device_id, workspace_name,
-                   observed_at, received_at, snapshot_type, payload_json
-            FROM snapshots
-            WHERE project_id = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (project_id,),
-        ).fetchone()
-
-    if row is None:
-        raise HTTPException(status_code=404, detail="project snapshot not found")
-
-    item = dict(row)
-    payload = json.loads(item.pop("payload_json"))
+    """Return the latest local workspace state, memory and evidence-fusion result."""
+    item, payload = latest_snapshot(project_id)
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
+    events = recent_agent_events(project_id, 300)
+
     item["git"] = payload.get("git") or {}
     item["git_change_analysis"] = payload.get("git_change_analysis") or {}
     item["analysis_stats"] = (payload.get("analysis") or {}).get("stats") or {}
     item["workspace_inventory"] = payload.get("workspace_inventory") or {}
     item["current_project_memory"] = memory
+    item["agent_events"] = events[-100:]
+    item["evidence_fusion"] = fuse_evidence(payload, events)
     return item
