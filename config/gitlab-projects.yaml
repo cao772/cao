@@ -1,0 +1,37 @@
+version: 1
+
+projects:
+  - project_id: low-voltage
+    project_name: 低电压精准立项资料审核智能体
+    repositories:
+      - id: low-voltage-frontend
+        role: frontend
+        provider: gitlab
+        url: http://git.hyetec.com/hyetec/rj26nw011/Front-end/voltage-management.git
+        api_project_path: hyetec/rj26nw011/Front-end/voltage-management
+      - id: low-voltage-algorithm
+        role: algorithm
+        provider: gitlab
+        url: http://git.hyetec.com/hyetec/rj26nw011/algorithm.git
+        api_project_path: hyetec/rj26nw011/algorithm
+
+  - project_id: power-defect-agent
+    project_name: 基于多模态大模型及智能体的电力设备缺陷处置
+    repositories:
+      - id: multimodal-agent
+        role: application
+        provider: gitlab
+        url: http://git.hyetec.com/hyetec/rj26nw025/multimodal-agent.git
+        api_project_path: hyetec/rj26nw025/multimodal-agent
+
+  - project_id: hyclaw-plugins
+    project_name: HyClaw Plugins
+    repositories:
+      - id: hyclaw-plugins
+        role: plugins
+        provider: gitlab
+        url: http://git.hyetec.com/hyetec/rrj26rj001/hyclaw/plugins/hyclaw-plugins.git
+        api_project_path: hyetec/rrj26rj001/hyclaw/plugins/hyclaw-plugins
+
+# Authentication is intentionally not stored here.
+# The remote collector reads GITLAB_BASE_URL / GITLAB_TOKEN from its environment.
