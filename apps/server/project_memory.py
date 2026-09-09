@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import date, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -19,6 +20,12 @@ VERSION = re.compile(r"(?i)(?:^|[^a-z0-9])v(\d+)(?:[._-](\d+))?")
 ISSUE = re.compile(r"第\s*(\d+)\s*期")
 COPY_MARKERS = re.compile(r"(?:副本|copy|备份|backup|归档|archive|historical|history)", re.IGNORECASE)
 CURRENT_MARKERS = re.compile(r"(?:最终|final|最新|current|正式版)", re.IGNORECASE)
+PARENT_SENSITIVE_STEMS = {
+    "readme", "skill", "index", "config", "configuration", "requirements",
+    "说明", "配置", "目录", "文档",
+}
+CURRENT_WINDOW_DAYS = 14
+RECENT_WINDOW_DAYS = 35
 
 
 def _clean_path(path: str) -> str:
@@ -39,8 +46,6 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
         date_precision = "day"
         date_text = f"{year:04d}-{month:02d}-{day:02d}"
     else:
-        # Real project folders commonly use 6_4, 6.18, 6.22-6.26, 7.2 or 629.
-        # For ranges we intentionally choose the last date as the freshness hint.
         candidates: list[tuple[int, int, str]] = []
         for match in MD_SEPARATED.finditer(name):
             month, day = map(int, match.groups())
@@ -73,10 +78,11 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
 
 
 def series_key(path: str) -> str:
-    """Collapse obvious filename versions into one document series.
+    """Collapse obvious versions/copies into one logical document series.
 
-    The parent path remains part of the key so unrelated directories do not merge.
-    Dates/ranges, V versions, issue numbers and obvious copy markers are stripped.
+    A document can move between folders during handoff without becoming a new series.
+    Very generic names (README/config/etc.) remain parent-sensitive to avoid merging
+    unrelated files from different modules.
     """
     clean = _clean_path(path)
     pure = PurePosixPath(clean)
@@ -90,7 +96,9 @@ def series_key(path: str) -> str:
     stem = re.sub(r"\((?:\d+|副本|copy)\)", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"(?:[_\-\s]+)(?:final|最终|最新版|最新)$", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"[_\-.\s（）()]+", " ", stem).strip()
-    return f"{pure.parent.as_posix().lower()}::{stem}::{pure.suffix.lower()}"
+    parent = pure.parent.as_posix().lower()
+    scope = parent if stem in PARENT_SENSITIVE_STEMS or len(stem) < 4 else "*"
+    return f"{scope}::{stem}::{pure.suffix.lower()}"
 
 
 def source_quality(path: str, role: str) -> int:
@@ -98,9 +106,6 @@ def source_quality(path: str, role: str) -> int:
     name = PurePosixPath(clean).name
     depth = len(PurePosixPath(clean).parts)
     score = 50
-
-    # Root-level project control/progress documents are usually more intentional
-    # than copies buried inside handoff/history folders.
     score += max(0, 12 - max(depth - 1, 0) * 3)
     if CURRENT_MARKERS.search(name):
         score += 12
@@ -167,12 +172,50 @@ def _dedupe_facts(facts: list[dict[str, Any]], limit: int = 300) -> list[dict[st
     return result
 
 
-def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
-    """Build a current-view memory without deleting historical source material.
+def _reference_year(items: list[dict[str, Any]]) -> int:
+    years: list[int] = []
+    for item in items:
+        value = int(infer_temporal_hints(str(item.get("path") or "")).get("date_value") or 0)
+        if value >= 10_000_00:
+            years.append(value // 10000)
+    return max(years) if years else 2000
 
-    The local collector keeps every analyzed item. The central fusion layer groups
-    obvious filename versions and selects the newest representative for the current
-    view. Older versions remain visible as history and can still be audited.
+
+def _source_date(path: str, reference_year: int, absolute_reference: date | None = None) -> date | None:
+    hints = infer_temporal_hints(path)
+    value = int(hints.get("date_value") or 0)
+    if not value:
+        return None
+    try:
+        if hints.get("date_precision") == "day":
+            return date(value // 10000, (value // 100) % 100, value % 100)
+        month, day = value // 100, value % 100
+        candidate = date(reference_year, month, day)
+        if absolute_reference and candidate > absolute_reference + timedelta(days=45):
+            candidate = date(reference_year - 1, month, day)
+        return candidate
+    except ValueError:
+        return None
+
+
+def _week_info(value: date) -> dict[str, str]:
+    iso_year, iso_week, _ = value.isocalendar()
+    start = value - timedelta(days=value.weekday())
+    end = start + timedelta(days=6)
+    return {
+        "week_key": f"{iso_year}-W{iso_week:02d}",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
+
+
+def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
+    """Build a current view while retaining old material as history.
+
+    Newest file in each logical series wins. On top of version selection, dated
+    source files are classified relative to the newest project-management source:
+    current (<=14d), recent (<=35d), historical (>35d). Historical/undated facts
+    remain queryable but no longer automatically drive current task/project state.
     """
     raw_items = analysis.get("items") or []
     items = [item for item in raw_items if isinstance(item, dict) and item.get("status") == "analyzed"]
@@ -182,7 +225,7 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
         groups[series_key(str(item.get("path") or ""))].append(item)
 
     current_items: list[dict[str, Any]] = []
-    historical_items: list[dict[str, Any]] = []
+    historical_versions: list[dict[str, Any]] = []
     version_families: list[dict[str, Any]] = []
 
     for key, group in groups.items():
@@ -190,7 +233,7 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
         latest = ordered[0]
         current_items.append(latest)
         if len(ordered) > 1:
-            historical_items.extend(ordered[1:])
+            historical_versions.extend(ordered[1:])
             version_families.append(
                 {
                     "series_key": key,
@@ -201,12 +244,48 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
             )
 
     current_items.sort(key=freshness_sort_key, reverse=True)
+    reference_year = _reference_year(current_items)
+    absolute_dates = [
+        _source_date(str(item.get("path") or ""), reference_year)
+        for item in current_items
+        if infer_temporal_hints(str(item.get("path") or "")).get("date_precision") == "day"
+    ]
+    absolute_reference = max((d for d in absolute_dates if d), default=None)
+    dated_sources = [
+        _source_date(str(item.get("path") or ""), reference_year, absolute_reference)
+        for item in current_items
+    ]
+    reference_date = max((d for d in dated_sources if d), default=None)
+
+    item_meta: dict[str, dict[str, Any]] = {}
+    for item in current_items:
+        path = str(item.get("path") or "")
+        source_date = _source_date(path, reference_year, absolute_reference)
+        if reference_date is None:
+            freshness = "current"
+        elif source_date is None:
+            freshness = "undated"
+        else:
+            age = max(0, (reference_date - source_date).days)
+            if age <= CURRENT_WINDOW_DAYS:
+                freshness = "current"
+            elif age <= RECENT_WINDOW_DAYS:
+                freshness = "recent"
+            else:
+                freshness = "historical"
+        item_meta[path] = {
+            "source_date": source_date.isoformat() if source_date else None,
+            "freshness": freshness,
+            "temporal": infer_temporal_hints(path),
+            "series_key": series_key(path),
+        }
 
     facts: list[dict[str, Any]] = []
     for item in current_items:
         path = str(item.get("path") or "")
         role = str(item.get("role") or "document")
         analysis_result = item.get("analysis") or {}
+        meta = item_meta[path]
         for fact in analysis_result.get("facts") or []:
             if not isinstance(fact, dict):
                 continue
@@ -217,13 +296,46 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
                     "path": path,
                     "role": role,
                     "source_quality": source_quality(path, role),
+                    "source_date": meta["source_date"],
+                    "freshness": meta["freshness"],
+                    "series_key": meta["series_key"],
                 }
             )
 
     facts = _dedupe_facts(facts)
+    active_facts = [fact for fact in facts if fact.get("freshness") == "current"]
+    recent_facts = [fact for fact in facts if fact.get("freshness") == "recent"]
+    historical_facts = [fact for fact in facts if fact.get("freshness") == "historical"]
+    undated_facts = [fact for fact in facts if fact.get("freshness") == "undated"]
+    if reference_date is None:
+        active_facts = facts
+
     buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for fact in facts:
+    all_buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for fact in active_facts:
         buckets[str(fact.get("type") or "note")].append(fact)
+    for fact in facts:
+        all_buckets[str(fact.get("type") or "note")].append(fact)
+
+    week_map: dict[str, dict[str, Any]] = {}
+    for fact in facts:
+        source_date_text = fact.get("source_date")
+        if not source_date_text:
+            continue
+        try:
+            source_date = date.fromisoformat(str(source_date_text))
+        except ValueError:
+            continue
+        info = _week_info(source_date)
+        group = week_map.setdefault(
+            info["week_key"],
+            {**info, "facts": [], "fact_count": 0},
+        )
+        group["facts"].append(fact)
+        group["fact_count"] += 1
+    weekly_facts = sorted(week_map.values(), key=lambda item: item["start"], reverse=True)
+    for group in weekly_facts:
+        group["facts"] = group["facts"][:100]
 
     latest_sources = []
     for item in current_items[:80]:
@@ -234,16 +346,18 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
                 "path": path,
                 "role": role,
                 "source_quality": source_quality(path, role),
-                "temporal": infer_temporal_hints(path),
+                **item_meta[path],
                 "summary": str((item.get("analysis") or {}).get("summary") or "")[:500],
             }
         )
 
     warnings: list[str] = []
     if version_families:
-        warnings.append(
-            f"检测到 {len(version_families)} 组多版本资料；当前视图只采用每组最新代表，历史版本未删除。"
-        )
+        warnings.append(f"检测到 {len(version_families)} 组多版本资料；当前视图采用每组最新版本，旧版本保留追溯。")
+    if historical_facts:
+        warnings.append(f"有 {len(historical_facts)} 条历史事实不再自动参与当前任务/阶段判断。")
+    if undated_facts and reference_date:
+        warnings.append(f"有 {len(undated_facts)} 条未标日期事实作为参考保留，不自动视为当前进展。")
     if not current_items and analysis.get("enabled"):
         warnings.append("资料分析已启用，但没有可用于当前视图的已解析文件。")
 
@@ -254,12 +368,20 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "current_source_count": len(current_items),
-        "historical_source_count": len(historical_items),
+        "historical_source_count": len(historical_versions),
         "version_family_count": len(version_families),
         "version_families": version_families[:100],
+        "freshness_reference_date": reference_date.isoformat() if reference_date else None,
+        "freshness_windows": {"current_days": CURRENT_WINDOW_DAYS, "recent_days": RECENT_WINDOW_DAYS},
         "latest_sources": latest_sources,
         "facts": facts,
+        "current_facts": active_facts[:300],
+        "recent_facts": recent_facts[:300],
+        "historical_facts": historical_facts[:300],
+        "undated_facts": undated_facts[:300],
+        "weekly_facts": weekly_facts[:26],
         "by_type": {key: value[:100] for key, value in buckets.items()},
+        "all_by_type": {key: value[:100] for key, value in all_buckets.items()},
         "blockers": buckets.get("blocker", [])[:50],
         "progress": buckets.get("progress", [])[:80],
         "tasks": buckets.get("task", [])[:80],
