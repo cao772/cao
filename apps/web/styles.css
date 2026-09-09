@@ -39,6 +39,7 @@ button { font: inherit; }
 .eyebrow { color: #4e6e91; font-size: 11px; letter-spacing: .12em; font-weight: 700; }
 .topbar h2 { margin: 5px 0 4px; font-size: 25px; color: #102844; font-weight: 680; }
 .topbar p { margin: 0; color: #667b92; font-size: 13px; }
+#project-subtitle:empty { display: none; }
 .secondary-button { border: 1px solid #a9bdd2; color: #214f7e; background: #fff; padding: 8px 15px; border-radius: 6px; cursor: pointer; }
 .secondary-button:hover { background: #f7fafc; }
 
