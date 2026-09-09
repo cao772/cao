@@ -238,10 +238,9 @@ async function selectProject(projectId) {
   renderProjectList();
   const project = state.projects.find(item => item.project_id === projectId) || {};
   els.title.textContent = projectLabel(project);
-  els.subtitle.textContent = '正在加载项目事实与证据...';
+  els.subtitle.textContent = '';
   try {
     state.detail = await loadProject(projectId);
-    els.subtitle.textContent = '本地开发 + Coding Agent + GitLab/GitHub 统一证据视图';
     renderOverview(project, state.detail);
     renderTasks(state.detail);
     renderMemory(state.detail);
@@ -249,7 +248,6 @@ async function selectProject(projectId) {
     renderTimeline(state.detail);
   } catch (error) {
     showToast(`加载项目失败：${error.message}`, true);
-    els.subtitle.textContent = '项目数据加载失败';
   }
 }
 
