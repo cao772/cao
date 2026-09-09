@@ -73,7 +73,19 @@ def _memory_values(workspace_snapshots: list[dict[str, Any]], key: str) -> list[
 
 def _contains_negative(text: str) -> bool:
     lower = text.lower()
+    # Test descriptions and successful tests can mention failure-handling cases.
+    if re.search(r"待测试|待验证|未执行|测试点|预期结果", lower):
+        return False
+    if re.search(r"\b[1-9]\d*\s+(?:failed|errors?)\b", lower):
+        return True
+    if re.search(r"\b\d+\s+passed\b", lower) and not re.search(r"仍有|尚有", lower):
+        return False
+    lower = re.sub(r"无失败|无超时|没有失败|失败回滚|失败反馈|错误处理|异常处理|定额错误|定额套用错误", "", lower)
     return any(marker in lower for marker in NEGATIVE_MARKERS)
+
+
+def _is_pending(text: str) -> bool:
+    return bool(re.search(r"尚未|未完成|未开始|待开发|待测试|待验证|待确认|待补齐|下一步|计划|拟|建议|需.*(?:确认|验证|回归|开发)", text))
 
 
 def _completed_progress(values: list[Any]) -> list[str]:
@@ -81,7 +93,7 @@ def _completed_progress(values: list[Any]) -> list[str]:
     for value in values:
         text = _text(value)
         lower = text.lower()
-        if not text or _contains_negative(text):
+        if not text or _contains_negative(text) or _is_pending(text) or "进行中" in text:
             continue
         if any(marker in lower for marker in COMPLETE_MARKERS):
             result.append(text)
@@ -94,7 +106,7 @@ def _metric_lines(values: list[Any]) -> list[str]:
         text = _text(value)
         if not text:
             continue
-        if any(marker in text for marker in METRIC_MARKERS) or re.search(r"\b\d+(?:\.\d+)?%\b", text):
+        if re.search(r"\d+(?:\.\d+)?\s*%|\d+\s*(?:passed|条|项|kB)", text) and not _is_pending(text):
             result.append(text)
     return _dedupe(result, 10)
 
@@ -105,7 +117,7 @@ def _next_lines(values: list[Any]) -> list[str]:
         text = _text(value)
         if not text:
             continue
-        if any(marker in text for marker in NEXT_MARKERS):
+        if _is_pending(text):
             result.append(text)
     return _dedupe(result, 12)
 
@@ -212,7 +224,7 @@ def build_project_brief(
 
     in_progress = [_text(item.get("title") or item.get("task_id")) for item in active_items]
     if not in_progress:
-        in_progress = [_text(value) for value in tasks_from_docs if not _contains_negative(_text(value))]
+        in_progress = [_text(value) for value in tasks_from_docs + progress if "进行中" in _text(value) and not _is_pending(_text(value))]
     in_progress = _dedupe(in_progress, 12)
 
     issue_lines = list(blockers)

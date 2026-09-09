@@ -173,18 +173,28 @@ def parse_docx(path: Path, max_chars: int) -> tuple[str, dict[str, Any]]:
     }
 
 
-def parse_xlsx(path: Path, max_chars: int, max_rows: int, max_cols: int) -> tuple[str, dict[str, Any]]:
+def parse_xlsx(path: Path, max_chars: int, max_rows: int, max_cols: int, allowed_sheets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
     from openpyxl import load_workbook
 
     workbook = load_workbook(str(path), read_only=True, data_only=True)
     chunks: list[str] = []
     sheets: list[dict[str, Any]] = []
+    truncated = False
     try:
+        if allowed_sheets is not None and not set(allowed_sheets).issubset(workbook.sheetnames):
+            raise ValueError("declared worksheet missing")
         for worksheet in workbook.worksheets:
+            if allowed_sheets is not None and worksheet.title not in allowed_sheets:
+                continue
             chunks.append(f"[Sheet] {worksheet.title}")
             row_count = 0
             for row in worksheet.iter_rows(values_only=True):
+                if row_count >= max_rows:
+                    truncated = True
+                    break
                 row_count += 1
+                if any(value is not None for value in row[max_cols:]):
+                    truncated = True
                 values = []
                 for value in row[:max_cols]:
                     if value is None:
@@ -193,8 +203,6 @@ def parse_xlsx(path: Path, max_chars: int, max_rows: int, max_cols: int) -> tupl
                         values.append(str(value).replace("\n", " ").strip())
                 if any(values):
                     chunks.append("\t".join(values))
-                if row_count >= max_rows:
-                    break
             sheets.append({"name": worksheet.title, "sampled_rows": row_count})
     finally:
         workbook.close()
@@ -204,7 +212,8 @@ def parse_xlsx(path: Path, max_chars: int, max_rows: int, max_cols: int) -> tupl
         "parser": "xlsx",
         "sheets": sheets,
         "sample_limits": {"rows_per_sheet": max_rows, "columns": max_cols},
-        "truncated": len(text) >= max_chars,
+        "truncated": truncated or len(text) >= max_chars,
+        "selected_sheets": allowed_sheets,
     }
 
 
@@ -272,6 +281,7 @@ def parse_file(
     csv_rows: int,
     csv_cols: int,
     pdf_pages: int,
+    xlsx_sheets: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     suffix = path.suffix.lower()
     if suffix in TEXT_SUFFIXES:
@@ -279,7 +289,7 @@ def parse_file(
     if suffix == ".docx":
         return parse_docx(path, max_chars)
     if suffix == ".xlsx":
-        return parse_xlsx(path, max_chars, xlsx_rows, xlsx_cols)
+        return parse_xlsx(path, max_chars, xlsx_rows, xlsx_cols, xlsx_sheets)
     if suffix == ".csv":
         return parse_csv(path, max_chars, csv_rows, csv_cols)
     if suffix == ".pdf":
@@ -569,7 +579,9 @@ def analyze_project_files(
             stats["io_error"] += 1
             continue
 
-        cached = cache.get(relative, digest)
+        policy = json.dumps({"version": 2, "analysis": analysis_cfg, "model": model, "endpoint": base_url}, sort_keys=True)
+        cache_digest = hashlib.sha256((digest + policy).encode()).hexdigest()
+        cached = cache.get(relative, cache_digest)
         if cached is not None:
             stats["cached"] += 1
             items.append(cached)
@@ -584,6 +596,7 @@ def analyze_project_files(
                 csv_rows,
                 csv_cols,
                 pdf_pages,
+                (analysis_cfg.get("xlsx_sheets") or {}).get(relative),
             )
         except Exception as exc:
             stats["parse_error"] += 1
@@ -627,7 +640,7 @@ def analyze_project_files(
             "parser": parser_meta,
             "analysis": analysis_result,
         }
-        cache.put(relative, digest, role, str(parser_meta.get("parser") or ""), item)
+        cache.put(relative, cache_digest, role, str(parser_meta.get("parser") or ""), item)
         items.append(item)
         stats["new_or_changed"] += 1
 

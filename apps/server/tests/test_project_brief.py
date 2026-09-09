@@ -94,3 +94,19 @@ def test_formal_completed_task_enters_completed_list():
     )
     assert brief["completed"] == ["资料更新树状页面"]
     assert brief["summary"]["completed_task_count"] == 1
+
+
+def test_negation_test_subjects_and_plans_do_not_reverse_status():
+    brief = build_project_brief([snapshot({
+        "progress": [{"text": "状态：进行中；缺少技术方案时仿真报告判定也通过"},
+                     {"text": "上线验收尚未完成"}],
+        "tasks": [{"text": "T01 未开始"}],
+        "tests": [{"text": "前端测试：7 passed；覆盖分析失败反馈"},
+                  {"text": "定额错误抽取链路，当前状态待测试"},
+                  {"text": "完成1431条验证，无失败无超时，准确率86.7%"}],
+    })], {"work_items": []})
+    assert brief["completed"] == []
+    assert brief["issues"] == []
+    assert "T01 未开始" not in brief["in_progress"]
+    assert "T01 未开始" in brief["next_steps"]
+    assert any("86.7%" in x for x in brief["latest_metrics"])

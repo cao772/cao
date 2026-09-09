@@ -12,6 +12,24 @@ class DocumentPipelineTests(unittest.TestCase):
         self.assertEqual(classify_role("docs/需求说明.md", "documents"), "requirement")
         self.assertEqual(classify_role("tests/回归测试.xlsx", "tests"), "test_result")
 
+    def test_xlsx_sheet_whitelist_and_truncation(self) -> None:
+        from openpyxl import Workbook
+        from document_pipeline import parse_xlsx
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "progress.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "current"
+            workbook.active.append(["allowed", "extra column"])
+            workbook.active.append(["extra row"])
+            workbook.create_sheet("unrelated").append(["must not upload"])
+            workbook.save(path)
+            text, meta = parse_xlsx(path, 1000, 1, 1, ["current"])
+            self.assertIn("allowed", text)
+            self.assertNotIn("must not upload", text)
+            self.assertTrue(meta["truncated"])
+            with self.assertRaises(ValueError):
+                parse_xlsx(path, 1000, 10, 10, ["missing"])
+
     def test_incremental_text_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "demo"
