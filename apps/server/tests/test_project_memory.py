@@ -1,14 +1,14 @@
 from project_memory import build_current_project_memory, infer_temporal_hints, series_key
 
 
-def _item(path: str, role: str, fact_text: str):
+def _item(path: str, role: str, fact_text: str, fact_type: str = "progress"):
     return {
         "path": path,
         "role": role,
         "status": "analyzed",
         "analysis": {
             "summary": fact_text,
-            "facts": [{"type": "progress", "text": fact_text}],
+            "facts": [{"type": fact_type, "text": fact_text}],
         },
     }
 
@@ -28,6 +28,7 @@ def test_weekly_reports_keep_latest_and_history():
     assert memory["current_source_count"] == 1
     assert memory["historical_source_count"] == 3
     assert memory["latest_sources"][0]["path"].endswith("第7期）0904.docx")
+    assert memory["freshness_reference_date"].endswith("09-04")
 
 
 def test_feature_list_versions_group_together():
@@ -60,3 +61,36 @@ def test_copy_marker_does_not_create_separate_series():
     current = "低电压项目 8.12问题反馈表.xlsx"
     copy = "副本低电压项目 8.12问题反馈表(5).xlsx"
     assert series_key(current) == series_key(copy)
+
+
+def test_same_logical_document_groups_across_handoff_folders():
+    assert series_key("management/生技域项目进度0904.xlsx") == series_key("handoff/latest/生技域项目进度0906.xlsx")
+
+
+def test_old_progress_is_history_not_current_task_state():
+    analysis = {
+        "enabled": True,
+        "items": [
+            _item("documents/7.7工作任务.xlsx", "progress", "旧任务状态：进行中", "task"),
+            _item("documents/低电压项目8.12问题反馈表.xlsx", "test_result", "估算书工程量匹配问题待核实", "blocker"),
+        ],
+    }
+    memory = build_current_project_memory(analysis)
+    assert memory["freshness_reference_date"].endswith("08-12")
+    assert memory["tasks"] == []
+    assert any("旧任务状态" in fact["text"] for fact in memory["historical_facts"])
+    assert any("估算书工程量" in fact["text"] for fact in memory["blockers"])
+
+
+def test_facts_carry_source_time_and_week_history():
+    analysis = {
+        "enabled": True,
+        "items": [
+            _item("management/项目周报0904.docx", "report", "完成第一轮验证"),
+            _item("management/SYSTEM_AUDIT_20260906.md", "report", "后端252项通过", "test"),
+        ],
+    }
+    memory = build_current_project_memory(analysis)
+    assert all("source_date" in fact and "freshness" in fact for fact in memory["facts"])
+    assert memory["weekly_facts"]
+    assert memory["weekly_facts"][0]["week_key"].startswith("2026-W")
