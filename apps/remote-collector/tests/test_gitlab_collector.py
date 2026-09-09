@@ -1,3 +1,7 @@
+from datetime import datetime, timezone
+import urllib.error
+
+import pytest
 import gitlab_collector
 from gitlab_collector import (
     gitlab_get_all,
@@ -129,3 +133,43 @@ def test_gitlab_get_all_paginates_until_short_page(monkeypatch):
     rows = gitlab_get_all("projects/1/events", {"per_page": 100})
     assert len(rows) == 102
     assert [item[1]["page"] for item in calls] == [1, 2]
+
+
+def test_collection_includes_development_branches_and_valid_deployment_filter(monkeypatch):
+    requests = {}
+
+    def fake_get(path, params):
+        requests[path.rsplit("/", 1)[-1]] = params
+        if path.endswith("/repository/commits"):
+            return [{"id": "development-branch-sha", "title": "branch work"}] if params.get("all") == "true" else []
+        if path.endswith("/deployments") and params.get("order_by") != "updated_at":
+            raise urllib.error.HTTPError(path, 400, "updated_at filter requires updated_at sort", {}, None)
+        return []
+
+    posted = []
+    monkeypatch.setattr(gitlab_collector, "gitlab_get_all", fake_get)
+    monkeypatch.setattr(gitlab_collector, "central_post", lambda event: posted.append(event) or True)
+    count, _ = gitlab_collector.collect_repository(PROJECT, REPO, datetime.now(timezone.utc))
+    assert count == 1
+    assert posted[0]["commit_sha"] == "development-branch-sha"
+    assert requests["deployments"]["order_by"] == "updated_at"
+
+
+@pytest.mark.parametrize("failure", ["gitlab_http", "central_post"])
+def test_failed_scan_keeps_checkpoint_for_retry(monkeypatch, failure):
+    old = "2026-05-12T00:00:00+00:00"
+    state = {"version": 1, "repositories": {REPO["id"]: {"last_successful_at": old}}}
+    monkeypatch.setattr(gitlab_collector, "load_config", lambda: {"projects": [{**PROJECT, "repositories": [REPO]}]})
+    monkeypatch.setattr(gitlab_collector, "load_state", lambda: state)
+    monkeypatch.setattr(gitlab_collector, "save_state", lambda result: None)
+
+    def fake_get(path, params):
+        if failure == "gitlab_http":
+            raise urllib.error.HTTPError(path, 400, "Bad request", {}, None)
+        return [{"id": 1, "created_at": "2026-09-08T00:00:00+00:00", "push_data": {"commit_to": "abc", "ref": "cyh"}}]
+
+    monkeypatch.setattr(gitlab_collector, "gitlab_get_all", fake_get)
+    monkeypatch.setattr(gitlab_collector, "central_post", lambda event: False)
+    result = gitlab_collector.scan_once()
+    assert len(result["failures"]) == 1
+    assert state["repositories"][REPO["id"]]["last_successful_at"] == old

@@ -345,7 +345,7 @@ def _collect_endpoint(
         rows = gitlab_get_all(path, params)
     except urllib.error.HTTPError as exc:
         print(json.dumps({"level": "warning", "repository": repository.get("id"), "path": path, "status": exc.code}, ensure_ascii=False))
-        return 0, newest
+        raise RuntimeError(f"GitLab endpoint {path} failed with HTTP {exc.code}") from exc
     for row in rows:
         event = normalizer(project, repository, row)
         observed = _parse_time(str(event.get("observed_at") or ""))
@@ -353,6 +353,8 @@ def _collect_endpoint(
             newest = observed
         if central_post(event):
             emitted += 1
+        else:
+            raise RuntimeError(f"Central rejected event from {path}; retry without advancing checkpoint")
     return emitted, newest
 
 
@@ -372,10 +374,10 @@ def collect_repository(
             {"action": "pushed", "after": since.date().isoformat(), "per_page": 100},
             normalize_push_event,
         ),
-        (f"projects/{encoded}/repository/commits", {"since": since_iso, "per_page": 100}, normalize_commit),
+        (f"projects/{encoded}/repository/commits", {"since": since_iso, "all": "true", "per_page": 100}, normalize_commit),
         (f"projects/{encoded}/merge_requests", {"scope": "all", "updated_after": since_iso, "per_page": 100}, normalize_merge_request),
         (f"projects/{encoded}/pipelines", {"updated_after": since_iso, "per_page": 100}, normalize_pipeline),
-        (f"projects/{encoded}/deployments", {"updated_after": since_iso, "per_page": 100}, normalize_deployment),
+        (f"projects/{encoded}/deployments", {"updated_after": since_iso, "order_by": "updated_at", "per_page": 100}, normalize_deployment),
     ]
 
     for path, params, normalizer in endpoints:
