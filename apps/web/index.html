@@ -39,11 +39,11 @@
       <section id="overview" class="overview-grid"></section>
 
       <section class="content-grid">
-        <div class="panel panel-wide">
+        <div class="panel panel-wide task-panel">
           <div class="panel-header">
             <div>
               <h3>当前任务</h3>
-              <p>查看任务进展、参与人员和待处理事项</p>
+              <p>只展示正在执行、需要处理和明确待办的事项</p>
             </div>
             <span id="task-scope" class="badge neutral">等待数据</span>
           </div>
@@ -54,7 +54,7 @@
           <div class="panel-header">
             <div>
               <h3>项目进展</h3>
-              <p>当前阶段、完成情况、问题与下一步</p>
+              <p>以最新资料为主，历史记录保留在周度进展中</p>
             </div>
           </div>
           <div id="project-memory" class="memory-block"></div>
@@ -64,7 +64,7 @@
           <div class="panel-header">
             <div>
               <h3>人员协作</h3>
-              <p>项目参与人员及当前开发情况</p>
+              <p>汇总本机接入人员和项目仓库参与人员</p>
             </div>
           </div>
           <div id="contributors" class="contributors"></div>
@@ -73,10 +73,10 @@
         <div class="panel panel-wide">
           <div class="panel-header">
             <div>
-              <h3>近期活动</h3>
-              <p>近期开发、测试、提交与交付动态</p>
+              <h3>每周进展</h3>
+              <p>按周查看完成事项、问题、指标和开发动态</p>
             </div>
-            <span id="timeline-count" class="badge neutral">0 条</span>
+            <span id="timeline-count" class="badge neutral">0 周</span>
           </div>
           <div id="timeline" class="timeline"></div>
         </div>
