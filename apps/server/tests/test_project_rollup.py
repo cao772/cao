@@ -102,3 +102,48 @@ def test_rollup_attention_if_any_workspace_has_failure_or_blocker():
 
     assert result["project_state"] == "attention"
     assert result["attention_workspace_count"] == 1
+
+
+def test_remote_gitlab_authors_are_project_contributors():
+    snapshots = [_snapshot(1, "caoyh", "mac-1", "缺陷", "cyh", False, 0)]
+    remote_events = [
+        {
+            "event_type": "git.commit",
+            "repository_id": "multimodal-agent",
+            "branch": "cyh",
+            "observed_at": "2026-09-08T10:00:00+00:00",
+            "data": {"author_name": "zhangsan", "author_email": "zhangsan@example.com"},
+        },
+        {
+            "event_type": "merge_request.opened",
+            "repository_id": "multimodal-agent",
+            "branch": "feature/x",
+            "observed_at": "2026-09-08T11:00:00+00:00",
+            "data": {"author": "lisi"},
+        },
+    ]
+
+    result = build_project_rollup(snapshots, [], remote_events)
+    names = {item["display_name"] for item in result["contributors"]}
+    assert names == {"caoyh", "zhangsan", "lisi"}
+    assert result["contributor_count"] == 3
+    assert result["local_contributor_count"] == 1
+    assert result["repository_contributor_count"] == 2
+    zhang = next(item for item in result["contributors"] if item["display_name"] == "zhangsan")
+    assert zhang["source_types"] == ["repository"]
+    assert zhang["repositories"] == ["multimodal-agent"]
+
+
+def test_exact_remote_actor_name_merges_with_local_user():
+    snapshots = [_snapshot(1, "caoyh", "mac-1", "缺陷", "cyh", False, 0)]
+    remote_events = [
+        {
+            "event_type": "git.push",
+            "repository_id": "multimodal-agent",
+            "observed_at": "2026-09-08T12:00:00+00:00",
+            "data": {"author": "caoyh"},
+        }
+    ]
+    result = build_project_rollup(snapshots, [], remote_events)
+    assert result["contributor_count"] == 1
+    assert result["contributors"][0]["source_types"] == ["local", "repository"]
