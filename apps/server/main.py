@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from project_brief import build_project_brief
 from project_evidence import fuse_project_evidence
 from project_memory import enrich_snapshot_payload
 from project_rollup import build_project_rollup
@@ -20,7 +21,7 @@ from workspace_inventory import build_workspace_inventory
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 
-app = FastAPI(title="AI Dev Management API", version="0.9.0")
+app = FastAPI(title="AI Dev Management API", version="0.10.0")
 
 
 class SnapshotIn(BaseModel):
@@ -249,7 +250,6 @@ def latest_snapshot(project_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def latest_workspace_snapshots(project_id: str) -> list[dict[str, Any]]:
-    """Return only the newest snapshot for each user/device/workspace tuple."""
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -274,8 +274,9 @@ def project_rollup(project_id: str) -> dict[str, Any]:
     snapshots = latest_workspace_snapshots(project_id)
     if not snapshots:
         raise HTTPException(status_code=404, detail="project snapshot not found")
-    events = recent_agent_events(project_id, 500)
-    return build_project_rollup(snapshots, events)
+    agent_events = recent_agent_events(project_id, 500)
+    remote_events = recent_remote_events(project_id, 2000)
+    return build_project_rollup(snapshots, agent_events, remote_events)
 
 
 def project_evidence(project_id: str) -> dict[str, Any]:
@@ -288,9 +289,23 @@ def project_evidence(project_id: str) -> dict[str, Any]:
     return apply_remote_evidence(local, remote)
 
 
+def project_brief(project_id: str) -> dict[str, Any]:
+    snapshots = latest_workspace_snapshots(project_id)
+    if not snapshots:
+        raise HTTPException(status_code=404, detail="project snapshot not found")
+    agent_events = recent_agent_events(project_id, 500)
+    remote_events = recent_remote_events(project_id, 2000)
+    return build_project_brief(
+        snapshots,
+        project_evidence(project_id),
+        remote_events,
+        agent_events,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.9.0"}
+    return {"status": "ok", "version": "0.10.0"}
 
 
 @app.post("/api/v1/snapshots")
@@ -356,7 +371,6 @@ def ingest_agent_event(
     event: AgentEventIn,
     x_collector_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Receive structured activity from Codex/TRAE/Hermes/other coding agents."""
     require_collector_token(x_collector_token)
     received_at = now_utc()
     client_event_id = event.client_event_id or str(uuid.uuid4())
@@ -412,7 +426,6 @@ def ingest_remote_event(
     event: RemoteEventIn,
     x_collector_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Receive normalized GitHub/GitLab/DevLake commit, MR/PR, CI and deployment facts."""
     require_collector_token(x_collector_token)
     received_at = now_utc()
     client_event_id = event.client_event_id or str(uuid.uuid4())
@@ -483,11 +496,13 @@ def list_projects() -> list[dict[str, Any]]:
                 "project_state_label": rollup.get("project_state_label"),
                 "workspace_count": rollup.get("workspace_count", 0),
                 "contributor_count": rollup.get("contributor_count", 0),
+                "local_contributor_count": rollup.get("local_contributor_count", 0),
+                "repository_contributor_count": rollup.get("repository_contributor_count", 0),
                 "dirty_workspace_count": rollup.get("dirty_workspace_count", 0),
                 "attention_workspace_count": rollup.get("attention_workspace_count", 0),
                 "agents": rollup.get("agents", []),
                 "branches": rollup.get("branches", {}),
-                "remote_event_count": len(recent_remote_events(str(item["project_id"]), 1000)),
+                "remote_event_count": rollup.get("remote_event_count", 0),
             }
         )
         result.append(item)
@@ -530,6 +545,8 @@ def list_project_contributors(project_id: str) -> dict[str, Any]:
     return {
         "project_id": project_id,
         "contributor_count": rollup["contributor_count"],
+        "local_contributor_count": rollup.get("local_contributor_count", 0),
+        "repository_contributor_count": rollup.get("repository_contributor_count", 0),
         "contributors": rollup["contributors"],
         "agents": rollup["agents"],
     }
@@ -551,14 +568,15 @@ def list_project_remote_events(
     return recent_remote_events(project_id, limit)
 
 
+@app.get("/api/v1/projects/{project_id}/brief")
+def get_project_brief(project_id: str) -> dict[str, Any]:
+    return project_brief(project_id)
+
+
 @app.get("/api/v1/projects/{project_id}/evidence")
 def get_project_evidence(project_id: str) -> dict[str, Any]:
     fusion = project_evidence(project_id)
     fusion["project_rollup"] = project_rollup(project_id)
-    fusion["scope_note"] = (
-        "任务级证据已融合所有开发人员最新本地工作区，并可叠加GitLab/GitHub/DevLake远端事件；"
-        "只有CI通过、代码合并和部署成功三类远端证据齐备时才判定正式完成。"
-    )
     return fusion
 
 
@@ -577,7 +595,6 @@ def list_project_tasks(project_id: str) -> dict[str, Any]:
 
 @app.get("/api/v1/projects/{project_id}/current")
 def get_current_project(project_id: str) -> dict[str, Any]:
-    """Return project rollup, local/remote task evidence and latest workspace details."""
     item, payload = latest_snapshot(project_id)
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
     events = recent_agent_events(project_id, 300)
@@ -591,8 +608,5 @@ def get_current_project(project_id: str) -> dict[str, Any]:
     item["remote_events"] = recent_remote_events(project_id, 200)[-100:]
     item["evidence_fusion"] = project_evidence(project_id)
     item["project_rollup"] = project_rollup(project_id)
-    item["evidence_scope_note"] = (
-        "evidence_fusion 已按任务融合多人本地工作区和远端DevOps事实；"
-        "页面上的 git/current_project_memory 仍表示最近一次上传的本地工作区详情。"
-    )
+    item["project_brief"] = project_brief(project_id)
     return item
