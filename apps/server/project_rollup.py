@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+import re
+from collections import Counter
 from datetime import datetime
 from typing import Any
 
@@ -32,6 +33,47 @@ def _has_failed_test(memory: dict[str, Any]) -> bool:
         if any(marker in text for marker in NEGATIVE_TEST_MARKERS):
             return True
     return False
+
+
+def _actor_key(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff@._-]+", "", text.lower())
+
+
+def _new_contributor(user_id: str, display_name: str | None = None) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "display_name": display_name or user_id,
+        "workspaces": [],
+        "devices": set(),
+        "branches": set(),
+        "repositories": set(),
+        "latest_activity_at": None,
+        "dirty_workspace_count": 0,
+        "changed_file_count": 0,
+        "attention_workspace_count": 0,
+        "agent_names": set(),
+        "agent_event_count": 0,
+        "remote_event_count": 0,
+        "source_types": set(),
+    }
+
+
+def _remote_actor(event: dict[str, Any]) -> tuple[str | None, str | None]:
+    data = event.get("data") or {}
+    event_type = str(event.get("event_type") or "")
+    candidates: list[Any] = []
+    if event_type == "git.commit":
+        candidates.extend([data.get("author_name"), data.get("author_email")])
+    else:
+        candidates.extend([data.get("author"), data.get("author_name"), data.get("author_username")])
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            candidate = candidate.get("username") or candidate.get("name")
+        text = re.sub(r"\s+", " ", str(candidate or "")).strip()
+        if text:
+            return _actor_key(text), text
+    return None, None
 
 
 def build_workspace_view(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -89,28 +131,29 @@ def build_workspace_view(snapshot: dict[str, Any]) -> dict[str, Any]:
 def build_project_rollup(
     workspace_snapshots: list[dict[str, Any]],
     agent_events: list[dict[str, Any]] | None = None,
+    remote_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """Aggregate every known participant without pretending Git-only users have a local agent."""
     agent_events = agent_events or []
+    remote_events = remote_events or []
     workspaces = [build_workspace_view(snapshot) for snapshot in workspace_snapshots]
 
     contributor_map: dict[str, dict[str, Any]] = {}
+
+    def contributor_for(raw_id: Any, display_name: str | None = None) -> dict[str, Any]:
+        raw_text = re.sub(r"\s+", " ", str(raw_id or "unknown")).strip() or "unknown"
+        key = _actor_key(raw_text) or "unknown"
+        item = contributor_map.get(key)
+        if item is None:
+            item = _new_contributor(raw_text, display_name)
+            contributor_map[key] = item
+        elif display_name and (not item.get("display_name") or item.get("display_name") == item.get("user_id")):
+            item["display_name"] = display_name
+        return item
+
     for workspace in workspaces:
-        user_id = str(workspace.get("user_id") or "unknown")
-        contributor = contributor_map.setdefault(
-            user_id,
-            {
-                "user_id": user_id,
-                "workspaces": [],
-                "devices": set(),
-                "branches": set(),
-                "latest_activity_at": None,
-                "dirty_workspace_count": 0,
-                "changed_file_count": 0,
-                "attention_workspace_count": 0,
-                "agent_names": set(),
-                "agent_event_count": 0,
-            },
-        )
+        contributor = contributor_for(workspace.get("user_id"))
+        contributor["source_types"].add("local")
         contributor["workspaces"].append(workspace.get("workspace_name"))
         if workspace.get("device_id"):
             contributor["devices"].add(str(workspace["device_id"]))
@@ -127,22 +170,8 @@ def build_project_rollup(
             contributor["attention_workspace_count"] += 1
 
     for event in agent_events:
-        user_id = str(event.get("user_id") or "unknown")
-        contributor = contributor_map.setdefault(
-            user_id,
-            {
-                "user_id": user_id,
-                "workspaces": [],
-                "devices": set(),
-                "branches": set(),
-                "latest_activity_at": None,
-                "dirty_workspace_count": 0,
-                "changed_file_count": 0,
-                "attention_workspace_count": 0,
-                "agent_names": set(),
-                "agent_event_count": 0,
-            },
-        )
+        contributor = contributor_for(event.get("user_id"))
+        contributor["source_types"].add("agent")
         agent = event.get("agent") or {}
         name = str(agent.get("name") or agent.get("vendor") or "").strip()
         if name:
@@ -152,21 +181,42 @@ def build_project_rollup(
             [contributor.get("latest_activity_at"), event.get("observed_at"), event.get("received_at")]
         )
 
+    for event in remote_events:
+        key, display_name = _remote_actor(event)
+        if not key or not display_name:
+            continue
+        contributor = contributor_for(key, display_name)
+        contributor["source_types"].add("repository")
+        contributor["remote_event_count"] += 1
+        repository_id = str(event.get("repository_id") or "").strip()
+        if repository_id:
+            contributor["repositories"].add(repository_id)
+        branch = str(event.get("branch") or "").strip()
+        if branch:
+            contributor["branches"].add(branch)
+        contributor["latest_activity_at"] = _latest_time(
+            [contributor.get("latest_activity_at"), event.get("observed_at"), event.get("received_at")]
+        )
+
     contributors: list[dict[str, Any]] = []
     for contributor in contributor_map.values():
         contributors.append(
             {
                 "user_id": contributor["user_id"],
+                "display_name": contributor["display_name"],
                 "workspace_count": len(set(item for item in contributor["workspaces"] if item)),
                 "workspaces": sorted(set(item for item in contributor["workspaces"] if item)),
                 "devices": sorted(contributor["devices"]),
                 "branches": sorted(contributor["branches"]),
+                "repositories": sorted(contributor["repositories"]),
                 "latest_activity_at": contributor["latest_activity_at"],
                 "dirty_workspace_count": contributor["dirty_workspace_count"],
                 "changed_file_count": contributor["changed_file_count"],
                 "attention_workspace_count": contributor["attention_workspace_count"],
                 "agents": sorted(contributor["agent_names"]),
                 "agent_event_count": contributor["agent_event_count"],
+                "remote_event_count": contributor["remote_event_count"],
+                "source_types": sorted(contributor["source_types"]),
             }
         )
     contributors.sort(key=lambda item: item.get("latest_activity_at") or "", reverse=True)
@@ -192,29 +242,33 @@ def build_project_rollup(
     if attention_count:
         state = "attention"
         state_label = "需要关注"
-    elif dirty_count or agent_events:
+    elif dirty_count or agent_events or remote_events:
         state = "active"
-        state_label = "多人协作开发中"
+        state_label = "协作开发中"
     else:
         state = "quiet"
         state_label = "暂无明显开发活动"
 
     return {
-        "version": 1,
+        "version": 2,
         "project_state": state,
         "project_state_label": state_label,
         "workspace_count": len(workspaces),
         "contributor_count": len(contributors),
+        "local_contributor_count": sum(1 for item in contributors if "local" in item["source_types"]),
+        "repository_contributor_count": sum(1 for item in contributors if "repository" in item["source_types"]),
         "dirty_workspace_count": dirty_count,
         "attention_workspace_count": attention_count,
         "local_changed_file_count": changed_files,
         "branches": dict(branch_counts),
         "agents": agents,
         "agent_event_count": len(agent_events),
+        "remote_event_count": len(remote_events),
         "agent_event_type_counts": dict(event_type_counts),
         "latest_activity_at": _latest_time(
             [workspace.get("observed_at") for workspace in workspaces]
             + [event.get("observed_at") for event in agent_events]
+            + [event.get("observed_at") for event in remote_events]
         ),
         "contributors": contributors,
         "workspaces": workspaces,
