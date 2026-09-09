@@ -54,12 +54,12 @@ function projectLabel(project) {
 
 function renderProjectList() {
   if (!state.projects.length) {
-    els.projectList.innerHTML = '<div class="empty">暂无已上报项目</div>';
+    els.projectList.innerHTML = '<div class="empty">暂无项目</div>';
     return;
   }
   els.projectList.innerHTML = state.projects.map(project => {
     const active = project.project_id === state.selectedProjectId ? ' active' : '';
-    const stateLabel = project.project_state_label || '暂无状态';
+    const stateLabel = project.project_state_label || '暂无明显进展';
     return `
       <button class="project-item${active}" data-project-id="${escapeHtml(project.project_id)}">
         <span class="name">${escapeHtml(projectLabel(project))}</span>
@@ -81,33 +81,32 @@ function metric(label, value, note = '', small = false) {
 }
 
 function renderOverview(project, detail) {
-  const current = detail.current || {};
-  const fusion = current.evidence_fusion || {};
-  const summary = fusion.summary || {};
-  const rollup = current.project_rollup || {};
-  const stateLabel = fusion.project_state_label || project.project_state_label || '暂无活动';
+  const brief = detail.brief || {};
+  const summary = brief.summary || {};
+  const rollup = detail.current?.project_rollup || {};
+  const issueCount = (brief.issues || []).length;
   els.overview.innerHTML = [
-    metric('项目状态', stateLabel, (summary.remote_event_count || 0) > 0 ? '已收到远端证据，按任务核验' : '尚无远端证据，当前仅有本地记录', true),
+    metric('当前阶段', brief.current_stage || '尚未识别', '根据当前项目资料与开发进展归纳', true),
     metric('开发人员', rollup.contributor_count ?? project.contributor_count ?? 0, `${rollup.workspace_count ?? project.workspace_count ?? 0} 个工作区`),
-    metric('任务事项', (detail.tasks.work_items || []).length, `${summary.completed_work_item_count || 0} 项正式完成`),
-    metric('本地未提交', rollup.dirty_workspace_count ?? project.dirty_workspace_count ?? 0, '涉及的工作区'),
-    metric('远端事件', project.remote_event_count ?? (detail.remoteEvents || []).length, 'Push / MR / CI / Deployment'),
+    metric('进行中任务', summary.in_progress_task_count ?? 0, `${summary.planned_task_count ?? 0} 项待开始`),
+    metric('待处理问题', issueCount, issueCount ? '需要继续跟进' : '当前未识别到明确问题'),
+    metric('本周提交', summary.weekly_commit_count ?? 0, `${summary.weekly_merge_count ?? 0} 次代码合并`),
   ].join('');
 }
 
 function renderTasks(detail) {
   const tasks = detail.tasks || {};
   const items = tasks.work_items || [];
-  const hasRemoteEvidence = (tasks.summary?.remote_event_count || 0) > 0;
-  els.taskScope.textContent = hasRemoteEvidence ? '本地与远端证据' : '本地证据';
-  els.taskScope.className = `badge ${hasRemoteEvidence ? 'info' : 'warn'}`;
+  const activeCount = items.filter(item => !['completed', 'planned'].includes(String(item.status || ''))).length;
+  els.taskScope.textContent = items.length ? `${activeCount} 项进行中` : '暂无任务';
+  els.taskScope.className = `badge ${activeCount ? 'info' : 'neutral'}`;
   if (!items.length) {
-    els.taskTable.innerHTML = '<div class="empty">尚未形成可关联的任务事项。Agent 可通过 MCP report_task_started 上报明确任务。</div>';
+    els.taskTable.innerHTML = '<div class="empty">尚未识别到明确任务，可从需求、工作任务表和开发活动中继续形成任务。</div>';
     return;
   }
   els.taskTable.innerHTML = `
     <table>
-      <thead><tr><th>任务</th><th>当前状态</th><th>参与人员</th><th>证据说明</th></tr></thead>
+      <thead><tr><th>任务</th><th>当前状态</th><th>参与人员</th><th>进展说明</th></tr></thead>
       <tbody>
         ${items.map(item => {
           const contributors = (item.contributors || []).join('、') || '-';
@@ -125,25 +124,27 @@ function renderTasks(detail) {
 
 function memoryTags(items, blocker = false) {
   if (!items || !items.length) return '<span class="muted">暂无</span>';
-  return `<div class="memory-tags">${items.slice(0, 12).map(item => {
+  return `<div class="memory-tags">${items.slice(0, 10).map(item => {
     const text = typeof item === 'string' ? item : (item.text || item.title || item.content || JSON.stringify(item));
     return `<span class="memory-tag${blocker ? ' blocker' : ''}">${escapeHtml(text)}</span>`;
   }).join('')}</div>`;
 }
 
 function renderMemory(detail) {
-  const memory = detail.current?.current_project_memory || {};
+  const brief = detail.brief || {};
   els.projectMemory.innerHTML = `
-    <div class="memory-row"><div class="memory-label">当前阶段</div><div class="memory-value">${escapeHtml(memory.current_stage || '尚未识别')}</div></div>
-    <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(memory.in_progress)}</div>
-    <div class="memory-row"><div class="memory-label">阻塞</div>${memoryTags(memory.blockers, true)}</div>
-    <div class="memory-row"><div class="memory-label">下一步</div>${memoryTags(memory.next_steps)}</div>`;
+    <div class="memory-row"><div class="memory-label">当前阶段</div><div class="memory-value">${escapeHtml(brief.current_stage || '尚未识别')}</div></div>
+    <div class="memory-row"><div class="memory-label">已完成</div>${memoryTags(brief.completed)}</div>
+    <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(brief.in_progress)}</div>
+    <div class="memory-row"><div class="memory-label">问题</div>${memoryTags(brief.issues, true)}</div>
+    <div class="memory-row"><div class="memory-label">下一步</div>${memoryTags(brief.next_steps)}</div>
+    <div class="memory-row"><div class="memory-label">最新指标</div>${memoryTags(brief.latest_metrics)}</div>`;
 }
 
 function renderContributors(detail) {
   const contributors = detail.contributors?.contributors || [];
   if (!contributors.length) {
-    els.contributors.innerHTML = '<div class="empty">暂无开发人员数据</div>';
+    els.contributors.innerHTML = '<div class="empty">暂无人员数据</div>';
     return;
   }
   els.contributors.innerHTML = contributors.map(item => {
@@ -153,9 +154,9 @@ function renderContributors(detail) {
       <div class="contributor">
         <div class="contributor-head"><span>${escapeHtml(item.user_id || item.name || '未知用户')}</span><span>${item.workspace_count || 0} 工作区</span></div>
         <div class="contributor-meta">
-          ${agents.length ? `<span class="badge info">${escapeHtml(agents.join(' / '))}</span>` : '<span class="badge neutral">无 Agent 记录</span>'}
+          ${agents.length ? `<span class="badge info">${escapeHtml(agents.join(' / '))}</span>` : ''}
           ${branches.length ? `<span>${escapeHtml(branches.join(' / '))}</span>` : ''}
-          ${item.dirty_workspace_count ? `<span class="badge warn">${item.dirty_workspace_count} 未提交</span>` : ''}
+          ${item.dirty_workspace_count ? `<span class="badge warn">${item.dirty_workspace_count} 待提交</span>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -168,48 +169,110 @@ function eventTime(value) {
   return date.toLocaleString('zh-CN', { hour12: false });
 }
 
+function agentActivity(event) {
+  const title = event.task_title || event.data?.summary || event.data?.blocker || '开发事项';
+  const mapping = {
+    'task.started': '开始处理',
+    'task.progress': '更新进展',
+    'task.finished': '完成开发',
+    'test.result': '测试结果',
+    'blocker.reported': '发现问题',
+  };
+  return {
+    time: event.observed_at,
+    type: 'agent',
+    title: `${event.user_id || '开发人员'} · ${mapping[event.event_type] || '开发进展'}：${title}`,
+    detail: event.data?.summary || event.data?.blocker || '',
+  };
+}
+
+function remoteActivity(event) {
+  const mapping = {
+    'git.push': '已推送代码',
+    'git.commit': '提交代码',
+    'merge_request.opened': '提交合并申请',
+    'merge_request.closed': '关闭合并申请',
+    'merge_request.merged': '代码已合并',
+    'ci.running': '自动检查进行中',
+    'ci.passed': '自动检查通过',
+    'ci.failed': '自动检查失败',
+    'ci.finished': '自动检查结束',
+    'deployment.succeeded': '部署完成',
+    'deployment.failed': '部署失败',
+  };
+  const label = mapping[event.event_type] || '项目更新';
+  const name = event.data?.title || event.task_title || event.branch || '';
+  const extras = [event.repository_id, event.branch].filter(Boolean).join(' · ');
+  return {
+    time: event.observed_at,
+    type: 'remote',
+    title: name ? `${label}：${name}` : label,
+    detail: extras,
+  };
+}
+
+function localSignature(snap) {
+  const git = snap.payload?.git || {};
+  const repositories = git.repositories || [];
+  const normalized = repositories.length ? repositories : [git];
+  return normalized.map(repo => [
+    repo.repository_id || repo.repository_path || '',
+    repo.branch || '',
+    Boolean(repo.dirty),
+    repo.ahead ?? '',
+    repo.behind ?? '',
+    JSON.stringify(repo.change_counts || {}),
+  ].join(':')).sort().join('|');
+}
+
+function localActivity(snap) {
+  const git = snap.payload?.git || {};
+  const repositories = git.repositories || [];
+  const normalized = repositories.length ? repositories : [git];
+  const dirty = normalized.filter(repo => repo.dirty).length;
+  const branches = [...new Set(normalized.map(repo => repo.branch).filter(Boolean))];
+  const changed = normalized.reduce((sum, repo) => sum + (repo.changed_files?.length || 0), 0);
+  const title = dirty ? `${snap.user_id || '开发人员'} · 本地修改待提交` : `${snap.user_id || '开发人员'} · 本地开发状态更新`;
+  const detail = [branches.join(' / '), changed ? `${changed} 个文件有变化` : '', dirty ? `${dirty} 个仓库待提交` : ''].filter(Boolean).join(' · ');
+  return { time: snap.observed_at, type: 'local', title, detail };
+}
+
 function buildTimeline(detail) {
   const items = [];
-  for (const event of detail.agentEvents || []) {
-    const agent = event.agent || {};
-    const summary = event.data?.summary || event.data?.blocker || event.task_title || event.event_type;
-    items.push({
-      time: event.observed_at,
-      type: 'agent',
-      title: `${event.user_id || '开发人员'} / ${agent.name || 'Agent'} · ${event.event_type}`,
-      detail: `${event.task_title || ''}${event.task_title && summary !== event.task_title ? ' ｜ ' : ''}${summary || ''}`,
-    });
-  }
+  for (const event of detail.agentEvents || []) items.push(agentActivity(event));
+
+  const pushedShas = new Set(
+    (detail.remoteEvents || [])
+      .filter(event => event.event_type === 'git.push' && event.commit_sha)
+      .map(event => String(event.commit_sha))
+  );
+  const remoteSeen = new Set();
   for (const event of detail.remoteEvents || []) {
-    const title = event.task_title || event.data?.title || event.data?.ref || event.event_type;
-    const extras = [event.repository_id, event.branch, event.commit_sha ? String(event.commit_sha).slice(0, 10) : null].filter(Boolean).join(' · ');
-    items.push({
-      time: event.observed_at,
-      type: 'remote',
-      title: `${event.provider || 'remote'} · ${event.event_type} · ${title}`,
-      detail: extras,
-    });
+    if (event.event_type === 'git.commit' && event.commit_sha && pushedShas.has(String(event.commit_sha))) continue;
+    const identity = [event.event_type, event.repository_id, event.commit_sha, event.branch, event.data?.pipeline_id, event.data?.iid].join('|');
+    if (remoteSeen.has(identity)) continue;
+    remoteSeen.add(identity);
+    items.push(remoteActivity(event));
   }
-  for (const snap of detail.snapshots || []) {
-    const git = snap.payload?.git || {};
-    const repositories = git.repositories || [];
-    const dirty = repositories.length ? repositories.filter(repo => repo.dirty).length : (git.dirty ? 1 : 0);
-    const branches = repositories.length ? repositories.map(repo => repo.branch).filter(Boolean) : [git.branch].filter(Boolean);
-    items.push({
-      time: snap.observed_at,
-      type: 'local',
-      title: `${snap.user_id || '开发人员'} · 本地工作区快照`,
-      detail: `${snap.workspace_name || ''}${branches.length ? ` ｜ ${branches.join(' / ')}` : ''}${dirty ? ` ｜ ${dirty} 个仓库有未提交修改` : ''}`,
-    });
+
+  const snapshotHistory = [...(detail.snapshots || [])].sort((a, b) => new Date(a.observed_at || 0) - new Date(b.observed_at || 0));
+  const lastByWorkspace = new Map();
+  for (const snap of snapshotHistory) {
+    const workspaceKey = [snap.user_id, snap.device_id, snap.workspace_name].join('|');
+    const signature = localSignature(snap);
+    if (lastByWorkspace.get(workspaceKey) === signature) continue;
+    lastByWorkspace.set(workspaceKey, signature);
+    items.push(localActivity(snap));
   }
-  return items.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0)).slice(0, 80);
+
+  return items.sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0)).slice(0, 60);
 }
 
 function renderTimeline(detail) {
   const items = buildTimeline(detail);
   els.timelineCount.textContent = `${items.length} 条`;
   if (!items.length) {
-    els.timeline.innerHTML = '<div class="empty">暂无活动记录</div>';
+    els.timeline.innerHTML = '<div class="empty">暂无近期活动</div>';
     return;
   }
   els.timeline.innerHTML = items.map(item => `
@@ -222,15 +285,16 @@ function renderTimeline(detail) {
 
 async function loadProject(projectId) {
   const encoded = encodeURIComponent(projectId);
-  const [current, tasks, contributors, agentEvents, remoteEvents, snapshots] = await Promise.all([
+  const [current, brief, tasks, contributors, agentEvents, remoteEvents, snapshots] = await Promise.all([
     api(`/api/v1/projects/${encoded}/current`),
+    api(`/api/v1/projects/${encoded}/brief`),
     api(`/api/v1/projects/${encoded}/tasks`),
     api(`/api/v1/projects/${encoded}/contributors`),
     api(`/api/v1/projects/${encoded}/agent-events?limit=100`),
-    api(`/api/v1/projects/${encoded}/remote-events?limit=200`),
-    api(`/api/v1/projects/${encoded}/snapshots?limit=30`),
+    api(`/api/v1/projects/${encoded}/remote-events?limit=300`),
+    api(`/api/v1/projects/${encoded}/snapshots?limit=80`),
   ]);
-  return { current, tasks, contributors, agentEvents, remoteEvents, snapshots };
+  return { current, brief, tasks, contributors, agentEvents, remoteEvents, snapshots };
 }
 
 async function selectProject(projectId) {
@@ -255,7 +319,7 @@ async function bootstrap() {
   try {
     await api('/health');
     els.apiState.className = 'health-dot ok';
-    els.apiStateText.textContent = '中央服务正常';
+    els.apiStateText.textContent = '服务正常';
     state.projects = await api('/api/v1/projects');
     renderProjectList();
     if (state.projects.length) {
@@ -264,16 +328,16 @@ async function bootstrap() {
         : state.projects[0].project_id;
       await selectProject(preferred);
     } else {
-      els.overview.innerHTML = metric('项目状态', '暂无项目', '等待本地 Sentinel 首次上报', true);
+      els.overview.innerHTML = metric('项目状态', '暂无项目', '等待项目首次采集', true);
       els.taskTable.innerHTML = '<div class="empty">暂无任务数据</div>';
-      els.projectMemory.innerHTML = '<div class="empty">暂无 Project Memory</div>';
+      els.projectMemory.innerHTML = '<div class="empty">暂无项目进展</div>';
       els.contributors.innerHTML = '<div class="empty">暂无人员数据</div>';
-      els.timeline.innerHTML = '<div class="empty">暂无活动记录</div>';
+      els.timeline.innerHTML = '<div class="empty">暂无近期活动</div>';
     }
   } catch (error) {
     els.apiState.className = 'health-dot error';
-    els.apiStateText.textContent = '中央服务不可用';
-    showToast(`连接中央服务失败：${error.message}`, true);
+    els.apiStateText.textContent = '服务不可用';
+    showToast(`连接服务失败：${error.message}`, true);
   }
 }
 
