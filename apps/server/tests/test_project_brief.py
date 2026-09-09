@@ -25,6 +25,7 @@ def test_business_brief_uses_real_project_facts_and_remote_activity():
                 "requirements": [{"text": "正式生产输入字段及接口待确认"}],
                 "blockers": [{"text": "部分细粒度缺陷仍受ROI质量影响"}],
                 "decisions": [],
+                "weekly_facts": [],
             },
             dirty=True,
         )
@@ -32,7 +33,7 @@ def test_business_brief_uses_real_project_facts_and_remote_activity():
     fusion = {
         "work_items": [
             {"title": "薄弱类别优化", "status": "in_progress_uncommitted"},
-            {"title": "生产接口确认", "status": "planned"},
+            {"title": "生产接口确认", "status": "planned", "task_id": "DEF-102"},
         ]
     }
     remote = [
@@ -110,3 +111,52 @@ def test_negation_test_subjects_and_plans_do_not_reverse_status():
     assert "T01 未开始" not in brief["in_progress"]
     assert "T01 未开始" in brief["next_steps"]
     assert any("86.7%" in x for x in brief["latest_metrics"])
+
+
+def test_unconfirmed_document_candidates_do_not_flood_next_steps():
+    fusion = {
+        "work_items": [
+            {"title": "功能清单共253条", "status": "planned", "origin": "document", "task_id": None},
+            {"title": "真实待办任务", "status": "planned", "origin": "agent", "task_id": "T-1"},
+        ]
+    }
+    brief = build_project_brief([snapshot({"progress": [], "tasks": [], "tests": [], "requirements": [], "blockers": [], "decisions": []})], fusion)
+    assert "功能清单共253条" not in brief["next_steps"]
+    assert "真实待办任务" in brief["next_steps"]
+    assert brief["summary"]["planned_task_count"] == 1
+    assert brief["summary"]["candidate_task_count"] == 2
+
+
+def test_newer_metric_family_wins_and_weekly_progress_is_grouped():
+    memory = {
+        "progress": [],
+        "tasks": [],
+        "requirements": [],
+        "blockers": [],
+        "decisions": [],
+        "tests": [
+            {"text": "后端227项通过、3项跳过", "source_date": "2026-09-04"},
+            {"text": "后端252项通过、3项跳过", "source_date": "2026-09-06"},
+        ],
+        "weekly_facts": [
+            {
+                "week_key": "2026-W36",
+                "start": "2026-08-31",
+                "end": "2026-09-06",
+                "facts": [
+                    {"type": "progress", "text": "完成1431条样本验证", "source_date": "2026-09-04"},
+                    {"type": "blocker", "text": "正式生产接口待确认", "source_date": "2026-09-04"},
+                ],
+            }
+        ],
+    }
+    brief = build_project_brief(
+        [snapshot(memory)],
+        {"work_items": []},
+        remote_events=[{"event_type": "git.commit", "observed_at": "2026-09-04T10:00:00Z", "commit_sha": "a"}],
+        now=datetime(2026, 9, 9, tzinfo=timezone.utc),
+    )
+    assert any("252项" in item for item in brief["latest_metrics"])
+    assert all("227项" not in item for item in brief["latest_metrics"])
+    assert brief["weekly_progress"][0]["week_key"] == "2026-W36"
+    assert "完成1431条样本验证" in brief["weekly_progress"][0]["completed"]
