@@ -6,16 +6,60 @@ from fastapi import APIRouter, HTTPException, Query
 
 import main
 from agent_sessions import build_agent_sessions, get_agent_session
+from people_store import resolve_contributors
 
 router = APIRouter()
 
 
+def _resolve_projection_people(projection: dict[str, Any]) -> dict[str, Any]:
+    """Attach a Person only when M4 already resolves the raw agent user identity.
+
+    Explicit person_id supplied by an Agent event wins. Otherwise the raw user_id is
+    resolved through the People identity rules. Unresolved identities stay null; we
+    never infer a GitLab/GitHub identity from a similar username here.
+    """
+    user_ids = sorted(
+        {
+            str(session.get("user_id") or "").strip()
+            for session in projection.get("sessions") or []
+            if session.get("user_id") and not session.get("person_id")
+        }
+    )
+    if not user_ids:
+        return projection
+
+    resolved = resolve_contributors(
+        [
+            {
+                "user_id": user_id,
+                "display_name": user_id,
+                "source_types": ["agent"],
+                "identity_refs": [{"provider": "agent", "external_id": user_id}],
+            }
+            for user_id in user_ids
+        ]
+    )
+    person_by_user = {
+        str(item.get("user_id") or ""): item.get("person_id")
+        for item in resolved
+        if item.get("user_id")
+    }
+    for session in projection.get("sessions") or []:
+        if session.get("person_id"):
+            continue
+        user_id = str(session.get("user_id") or "").strip()
+        if user_id:
+            session["person_id"] = person_by_user.get(user_id)
+    return projection
+
+
 def agent_session_projection(project_id: str, limit: int = 5000) -> dict[str, Any]:
-    return build_agent_sessions(
+    projection = build_agent_sessions(
         main.recent_agent_events(project_id, limit),
         project_id=project_id,
         now=main.now_utc(),
     )
+    return _resolve_projection_people(projection)
 
 
 def _agent_event_project_ids() -> list[str]:
