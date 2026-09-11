@@ -172,6 +172,41 @@
         <div class="panel settings-card">
           <div class="settings-card-head">
             <div>
+              <h3>模型分析</h3>
+              <p>配置项目资料分析使用的模型接口。密钥保存后不会在页面回显。</p>
+            </div>
+            <div id="model-connection-state" class="connection-state">未配置</div>
+          </div>
+          <div class="settings-form-grid">
+            <label class="field field-wide">
+              <span>接口地址</span>
+              <input id="model-base-url" type="url" placeholder="例如 https://api.example.com/v1" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>模型名称</span>
+              <input id="model-name" type="text" placeholder="填写接口实际使用的 model 名称" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>接口密钥</span>
+              <input id="model-api-key" type="password" placeholder="保存后不会回显" autocomplete="new-password" />
+              <small id="model-api-key-hint">尚未配置模型密钥</small>
+            </label>
+            <label class="field">
+              <span>超时时间（秒）</span>
+              <input id="model-timeout" type="number" min="5" max="300" value="60" />
+            </label>
+            <label class="policy-toggle model-remote-toggle"><input id="model-allow-remote" type="checkbox" checked /><span>允许调用非本机模型接口</span></label>
+          </div>
+          <div class="settings-actions">
+            <button id="model-test-btn" class="secondary-button" type="button">测试连接</button>
+            <button id="model-save-btn" class="primary-button" type="button">保存模型配置</button>
+          </div>
+          <div id="model-message" class="inline-message"></div>
+        </div>
+
+        <div class="panel settings-card">
+          <div class="settings-card-head">
+            <div>
               <h3>GitLab 接入</h3>
               <p>配置一次后，可检索当前账号有权限访问的项目。</p>
             </div>
@@ -264,5 +299,6 @@
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
   <script src="/settings-policy.js"></script>
+  <script src="/settings-model.js"></script>
 </body>
 </html>
