@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Any
 
 
 NEGATIVE_TEST_MARKERS = ("失败", "不通过", "未通过", "failed", "failure", "error", "异常")
 POSITIVE_TEST_MARKERS = ("通过", "pass", "passed", "成功", "ok")
-BLOCKER_MARKERS = ("阻塞", "blocker", "无法", "卡住", "失败", "异常")
 GENERIC_TERMS = {
     "项目", "功能", "开发", "任务", "测试", "问题", "修改", "优化", "支持", "实现",
     "当前", "相关", "系统", "代码", "页面", "接口", "进行", "完成",
@@ -109,32 +108,82 @@ def _event_kind(event_type: str) -> str:
 def _agent_event_text(event: dict[str, Any]) -> str:
     data = event.get("data") or {}
     values = [
-        event.get("task_title"),
-        data.get("summary"),
-        data.get("message"),
-        data.get("result"),
-        data.get("status"),
-        data.get("blocker"),
+        event.get("task_title"), data.get("summary"), data.get("message"), data.get("result"),
+        data.get("status"), data.get("blocker"),
     ]
     return " ".join(_compact(value, 300) for value in values if value)
 
 
 def _make_evidence(source: str, kind: str, text: str, **extra: Any) -> dict[str, Any]:
-    result = {
-        "source": source,
-        "kind": kind,
-        "text": _compact(text, 800),
-    }
+    result = {"source": source, "kind": kind, "text": _compact(text, 800)}
     result.update({key: value for key, value in extra.items() if value is not None})
     return result
 
 
-def _candidate_work_items(memory: dict[str, Any], agent_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _fact_type(fact: dict[str, Any]) -> str:
+    raw = str(
+        fact.get("type") or fact.get("fact_type") or fact.get("category") or fact.get("role") or ""
+    ).lower()
+    text = _compact(fact.get("text") or fact.get("title") or fact.get("content"), 1000).lower()
+    if "block" in raw or "阻塞" in raw or "问题" in raw:
+        return "blocker"
+    if "test" in raw or "测试" in raw or "验证" in raw:
+        return "test"
+    if "require" in raw or "需求" in raw:
+        return "requirement"
+    if "task" in raw or "任务" in raw:
+        return "task"
+    if "progress" in raw or "进展" in raw or "完成" in raw:
+        return "progress"
+    if any(marker in text for marker in NEGATIVE_TEST_MARKERS + POSITIVE_TEST_MARKERS) and "测试" in text:
+        return "test"
+    if any(marker in text for marker in ("阻塞", "卡住", "无法")):
+        return "blocker"
+    if any(marker in text for marker in ("已完成", "完成", "进行中", "进展")):
+        return "progress"
+    return "task"
+
+
+def _memory_groups(memory: dict[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], str]:
+    """Prefer Project Memory V2 current_facts; historical facts never become current truth."""
+    current_facts = memory.get("current_facts")
+    if isinstance(current_facts, list) and current_facts:
+        groups = {"requirements": [], "tasks": [], "tests": [], "blockers": [], "progress": []}
+        mapping = {
+            "requirement": "requirements", "task": "tasks", "test": "tests",
+            "blocker": "blockers", "progress": "progress",
+        }
+        for raw in current_facts:
+            if not isinstance(raw, dict):
+                continue
+            fact = dict(raw)
+            fact["text"] = _compact(fact.get("text") or fact.get("title") or fact.get("content"), 1000)
+            if not fact["text"]:
+                continue
+            groups[mapping[_fact_type(fact)]].append(fact)
+        return groups, "current_facts"
+
+    return (
+        {
+            "requirements": [dict(x) for x in (memory.get("requirements") or []) if isinstance(x, dict)],
+            "tasks": [dict(x) for x in (memory.get("tasks") or []) if isinstance(x, dict)],
+            "tests": [dict(x) for x in (memory.get("tests") or []) if isinstance(x, dict)],
+            "blockers": [dict(x) for x in (memory.get("blockers") or []) if isinstance(x, dict)],
+            "progress": [dict(x) for x in (memory.get("progress") or []) if isinstance(x, dict)],
+        },
+        "legacy_facts",
+    )
+
+
+def _candidate_work_items(
+    memory: dict[str, Any], agent_events: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], str]:
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    groups, memory_mode = _memory_groups(memory)
 
     for fact_type, key in (("requirement", "requirements"), ("task", "tasks")):
-        for fact in memory.get(key) or []:
+        for fact in groups[key]:
             text = _compact(fact.get("text"), 700)
             if not text:
                 continue
@@ -142,64 +191,69 @@ def _candidate_work_items(memory: dict[str, Any], agent_events: list[dict[str, A
             if not normalized or normalized in seen:
                 continue
             seen.add(normalized)
+            task_key = _compact(fact.get("task_key") or fact.get("task_id"), 160) or None
             candidates.append(
                 {
-                    "work_item_id": _stable_id("DOC", f"{fact_type}:{text}"),
+                    "work_item_id": task_key or _stable_id("DOC", f"{fact_type}:{text}"),
+                    "task_key": task_key,
                     "title": text,
                     "origin": "document",
                     "origin_type": fact_type,
-                    "task_id": None,
+                    "task_id": _compact(fact.get("task_id"), 120) or None,
                     "evidence": [
                         _make_evidence(
-                            "document",
-                            fact_type,
-                            text,
-                            path=fact.get("path"),
-                            role=fact.get("role"),
+                            "document", fact_type, text,
+                            path=fact.get("path"), role=fact.get("role"),
+                            observed_at=fact.get("observed_at") or fact.get("source_date") or fact.get("document_date"),
+                            series_id=fact.get("series_id"), freshness=fact.get("freshness"), task_key=task_key,
                         )
                     ],
                 }
             )
 
     for event in agent_events:
+        data = event.get("data") or {}
+        task_key = _compact(event.get("task_key") or data.get("task_key"), 160)
         task_id = _compact(event.get("task_id"), 120)
         title = _compact(event.get("task_title"), 700)
-        if not task_id and not title:
+        if not task_id and not task_key and not title:
             continue
         existing = None
-        if task_id:
-            existing = next((item for item in candidates if item.get("task_id") == task_id), None)
+        identity = task_key or task_id
+        if identity:
+            existing = next(
+                (item for item in candidates if identity in {str(item.get("task_key") or ""), str(item.get("task_id") or "")}),
+                None,
+            )
         if existing is None and title:
             best = max(
                 ((similarity(title, item["title"]), item) for item in candidates),
-                key=lambda pair: pair[0],
-                default=(0.0, None),
+                key=lambda pair: pair[0], default=(0.0, None),
             )
             if best[0] >= 0.62:
                 existing = best[1]
         if existing is not None:
             if task_id and not existing.get("task_id"):
                 existing["task_id"] = task_id
+            if task_key and not existing.get("task_key"):
+                existing["task_key"] = task_key
             continue
 
-        identity = task_id or title
-        normalized = _normalized(identity)
+        raw_identity = task_key or task_id or title
+        normalized = _normalized(raw_identity)
         if normalized and normalized in seen:
             continue
         if normalized:
             seen.add(normalized)
         candidates.append(
             {
-                "work_item_id": task_id or _stable_id("AGENT", title),
-                "title": title or task_id,
-                "origin": "agent",
-                "origin_type": "task",
-                "task_id": task_id or None,
-                "evidence": [],
+                "work_item_id": task_key or task_id or _stable_id("AGENT", title),
+                "task_key": task_key or None,
+                "title": title or task_key or task_id,
+                "origin": "agent", "origin_type": "task", "task_id": task_id or None, "evidence": [],
             }
         )
-
-    return candidates[:300]
+    return candidates[:300], groups, memory_mode
 
 
 def _best_work_item(text: str, work_items: list[dict[str, Any]], threshold: float) -> tuple[dict[str, Any] | None, float]:
@@ -210,35 +264,36 @@ def _best_work_item(text: str, work_items: list[dict[str, Any]], threshold: floa
     for item in work_items:
         score = similarity(text, item.get("title"))
         if score > best_score:
-            best_score = score
-            best_item = item
+            best_score = score; best_item = item
     return (best_item, best_score) if best_score >= threshold else (None, best_score)
 
 
 def _attach_agent_events(work_items: list[dict[str, Any]], agent_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unlinked: list[dict[str, Any]] = []
     for event in agent_events:
+        data = event.get("data") or {}
+        task_key = _compact(event.get("task_key") or data.get("task_key"), 160)
         task_id = _compact(event.get("task_id"), 120)
-        target = next((item for item in work_items if task_id and item.get("task_id") == task_id), None)
+        target = next(
+            (
+                item for item in work_items
+                if (task_key and task_key == str(item.get("task_key") or ""))
+                or (task_id and task_id == str(item.get("task_id") or ""))
+            ),
+            None,
+        )
         score = 1.0 if target is not None else 0.0
         if target is None:
             target, score = _best_work_item(_agent_event_text(event), work_items, 0.48)
         evidence = _make_evidence(
-            "agent",
-            _event_kind(str(event.get("event_type") or "")),
+            "agent", _event_kind(str(event.get("event_type") or "")),
             _agent_event_text(event) or str(event.get("event_type") or "agent event"),
-            event_type=event.get("event_type"),
-            observed_at=event.get("observed_at"),
-            user_id=event.get("user_id"),
-            agent=event.get("agent"),
-            session_id=event.get("session_id"),
-            task_id=task_id or None,
-            match_score=round(score, 3),
+            event_type=event.get("event_type"), observed_at=event.get("observed_at"),
+            user_id=event.get("user_id"), agent=event.get("agent"), session_id=event.get("session_id"),
+            task_id=task_id or None, task_key=task_key or None, match_score=round(score, 3),
         )
-        if target is None:
-            unlinked.append(evidence)
-        else:
-            target["evidence"].append(evidence)
+        if target is None: unlinked.append(evidence)
+        else: target["evidence"].append(evidence)
     return unlinked
 
 
@@ -248,55 +303,46 @@ def _attach_code_changes(work_items: list[dict[str, Any]], git_change_analysis: 
         if not isinstance(item, dict) or item.get("status") != "analyzed":
             continue
         analysis = item.get("analysis") or {}
-        text_parts = [
-            analysis.get("summary"),
-            " ".join(str(value) for value in (analysis.get("business_capabilities") or [])),
-            item.get("path"),
-        ]
-        candidate_text = " ".join(_compact(value, 800) for value in text_parts if value)
+        candidate_text = " ".join(
+            _compact(value, 800)
+            for value in [analysis.get("summary"), " ".join(str(v) for v in (analysis.get("business_capabilities") or [])), item.get("path")]
+            if value
+        )
         target, score = _best_work_item(candidate_text, work_items, 0.36)
         evidence = _make_evidence(
-            "git_local",
-            "code_change",
-            analysis.get("summary") or item.get("path") or "code change",
-            path=item.get("path"),
-            additions=item.get("additions"),
-            deletions=item.get("deletions"),
-            change_area=analysis.get("change_area"),
-            risks=analysis.get("risks") or [],
-            match_score=round(score, 3),
+            "git_local", "code_change", analysis.get("summary") or item.get("path") or "code change",
+            path=item.get("path"), additions=item.get("additions"), deletions=item.get("deletions"),
+            change_area=analysis.get("change_area"), risks=analysis.get("risks") or [], match_score=round(score, 3),
         )
-        if target is None:
-            unlinked.append(evidence)
-        else:
-            target["evidence"].append(evidence)
+        if target is None: unlinked.append(evidence)
+        else: target["evidence"].append(evidence)
     return unlinked
 
 
 def _attach_memory_facts(
-    work_items: list[dict[str, Any]],
-    facts: list[dict[str, Any]],
-    source_kind: str,
-    threshold: float,
+    work_items: list[dict[str, Any]], facts: list[dict[str, Any]], source_kind: str, threshold: float,
 ) -> list[dict[str, Any]]:
     unlinked: list[dict[str, Any]] = []
     for fact in facts:
-        text = _compact(fact.get("text"), 700)
+        text = _compact(fact.get("text") or fact.get("title") or fact.get("content"), 700)
         if not text:
             continue
-        target, score = _best_work_item(text, work_items, threshold)
+        task_key = _compact(fact.get("task_key") or fact.get("task_id"), 160)
+        target = next(
+            (item for item in work_items if task_key and task_key in {str(item.get("task_key") or ""), str(item.get("task_id") or "")}),
+            None,
+        )
+        score = 1.0 if target is not None else 0.0
+        if target is None:
+            target, score = _best_work_item(text, work_items, threshold)
         evidence = _make_evidence(
-            "document",
-            source_kind,
-            text,
-            path=fact.get("path"),
-            role=fact.get("role"),
+            "document", source_kind, text, path=fact.get("path"), role=fact.get("role"),
+            observed_at=fact.get("observed_at") or fact.get("source_date") or fact.get("document_date"),
+            series_id=fact.get("series_id"), freshness=fact.get("freshness"), task_key=task_key or None,
             match_score=round(score, 3),
         )
-        if target is None:
-            unlinked.append(evidence)
-        else:
-            target["evidence"].append(evidence)
+        if target is None: unlinked.append(evidence)
+        else: target["evidence"].append(evidence)
     return unlinked
 
 
@@ -307,146 +353,90 @@ def _derive_status(item: dict[str, Any], git_state: dict[str, Any]) -> tuple[str
     agent_active = kinds["started"] > 0 or kinds["progress"] > 0
     code_present = kinds["code_change"] > 0
     blocker_present = kinds["blocker"] > 0
-
     test_outcomes = [_test_outcome(str(entry.get("text") or "")) for entry in evidence if entry.get("kind") == "test"]
     test_failed = "failed" in test_outcomes
     test_passed = "passed" in test_outcomes and not test_failed
-
-    dirty = bool(git_state.get("dirty"))
-    ahead = git_state.get("ahead")
-    upstream = git_state.get("upstream")
+    dirty = bool(git_state.get("dirty")); ahead = git_state.get("ahead")
 
     reasons: list[str] = []
-    if blocker_present:
-        reasons.append("存在与该事项关联的阻塞证据")
-        return "blocked", reasons
-    if test_failed:
-        reasons.append("存在失败/不通过测试证据")
-        return "test_failing", reasons
-
+    if blocker_present: return "blocked", ["存在与该事项关联的阻塞证据"]
+    if test_failed: return "test_failing", ["存在失败/不通过测试证据"]
     if agent_finished and code_present and test_passed:
         reasons.extend(["Agent已声明完成", "检测到代码变更", "存在通过测试证据"])
         if dirty:
-            reasons.append("当前工作区仍有未提交修改")
-            return "locally_complete_uncommitted", reasons
+            reasons.append("当前工作区仍有未提交修改"); return "locally_complete_uncommitted", reasons
         if isinstance(ahead, int) and ahead > 0:
-            reasons.append("本地分支领先上游，尚有未推送提交")
-            return "locally_complete_unpushed", reasons
-        reasons.append("尚未接入PR/MR/CI远端证据，不判定正式完成")
-        return "local_verified_pending_remote", reasons
-
+            reasons.append("本地分支领先上游，尚有未推送提交"); return "locally_complete_unpushed", reasons
+        reasons.append("尚未接入PR/MR/CI远端证据，不判定正式完成"); return "local_verified_pending_remote", reasons
     if agent_finished and code_present:
         reasons.extend(["Agent已声明完成", "检测到代码变更"])
         if dirty:
-            reasons.append("工作区仍有未提交修改")
-            return "implementation_claimed_uncommitted", reasons
-        reasons.append("缺少明确通过测试证据")
-        return "implementation_claimed_unverified", reasons
-
-    if agent_finished and not code_present:
-        reasons.append("只有Agent完成声明，未关联到代码实现证据")
-        return "agent_claim_only", reasons
-
-    if code_present and test_passed:
-        reasons.extend(["检测到代码变更", "存在通过测试证据"])
-        return "implementation_tested", reasons
-
+            reasons.append("工作区仍有未提交修改"); return "implementation_claimed_uncommitted", reasons
+        reasons.append("缺少明确通过测试证据"); return "implementation_claimed_unverified", reasons
+    if agent_finished and not code_present: return "agent_claim_only", ["只有Agent完成声明，未关联到代码实现证据"]
+    if code_present and test_passed: return "implementation_tested", ["检测到代码变更", "存在通过测试证据"]
     if code_present:
         reasons.append("检测到代码变更")
         if dirty:
-            reasons.append("当前工作区有未提交修改")
-            return "in_progress_uncommitted", reasons
+            reasons.append("当前工作区有未提交修改"); return "in_progress_uncommitted", reasons
         if isinstance(ahead, int) and ahead > 0:
-            reasons.append("本地分支领先上游")
-            return "implemented_local_commit_unpushed", reasons
+            reasons.append("本地分支领先上游"); return "implemented_local_commit_unpushed", reasons
         return "implementation_detected", reasons
-
-    if agent_active:
-        reasons.append("Agent存在启动或进度事件")
-        return "in_progress_agent", reasons
-
-    if item.get("origin") in {"document", "agent"}:
-        reasons.append("已有需求/任务定义，但未关联到实现证据")
-        return "planned", reasons
-
+    if agent_active: return "in_progress_agent", ["Agent存在启动或进度事件"]
+    if item.get("origin") in {"document", "agent"}: return "planned", ["已有需求/任务定义，但未关联到实现证据"]
     return "unknown", ["当前证据不足"]
 
 
 def fuse_evidence(payload: dict[str, Any], agent_events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Conservatively fuse local project evidence without inventing completion.
-
-    This MVP intentionally treats local documents, local Git state, local tests and
-    agent claims as separate evidence classes. A task is never marked formally
-    completed because remote PR/MR/CI/deployment evidence is not connected yet.
-    """
+    """Fuse current local evidence conservatively; remote completion is handled separately."""
     agent_events = agent_events or []
     memory = ((payload.get("analysis") or {}).get("current_project_memory") or {})
-    git_state = payload.get("git") or {}
-    git_changes = payload.get("git_change_analysis") or {}
+    git_state = payload.get("git") or {}; git_changes = payload.get("git_change_analysis") or {}
 
-    work_items = _candidate_work_items(memory, agent_events)
+    work_items, groups, memory_mode = _candidate_work_items(memory, agent_events)
     unlinked_agent = _attach_agent_events(work_items, agent_events)
     unlinked_code = _attach_code_changes(work_items, git_changes)
-    unlinked_tests = _attach_memory_facts(work_items, memory.get("tests") or [], "test", 0.34)
-    unlinked_blockers = _attach_memory_facts(work_items, memory.get("blockers") or [], "blocker", 0.34)
+    unlinked_tests = _attach_memory_facts(work_items, groups["tests"], "test", 0.34)
+    unlinked_blockers = _attach_memory_facts(work_items, groups["blockers"], "blocker", 0.34)
+    unlinked_progress = _attach_memory_facts(work_items, groups["progress"], "progress_claim", 0.34)
 
     status_counts: Counter[str] = Counter()
     for item in work_items:
         status, reasons = _derive_status(item, git_state)
-        item["status"] = status
-        item["status_label"] = STATUS_LABELS.get(status, status)
-        item["status_reasons"] = reasons
+        item["status"] = status; item["status_label"] = STATUS_LABELS.get(status, status); item["status_reasons"] = reasons
         item["evidence_count"] = len(item.get("evidence") or [])
         item["evidence_sources"] = sorted({str(entry.get("source") or "") for entry in item.get("evidence") or [] if entry.get("source")})
         status_counts[status] += 1
 
-    global_test_failures = [fact for fact in (memory.get("tests") or []) if _test_outcome(str(fact.get("text") or "")) == "failed"]
-    global_blockers = list(memory.get("blockers") or [])
-
+    global_test_failures = [fact for fact in groups["tests"] if _test_outcome(str(fact.get("text") or "")) == "failed"]
+    global_blockers = list(groups["blockers"])
     active_statuses = {
         "blocked", "test_failing", "locally_complete_uncommitted", "locally_complete_unpushed",
-        "implementation_claimed_uncommitted", "implementation_claimed_unverified",
-        "implementation_tested", "in_progress_uncommitted", "implemented_local_commit_unpushed",
-        "implementation_detected", "in_progress_agent",
+        "implementation_claimed_uncommitted", "implementation_claimed_unverified", "implementation_tested",
+        "in_progress_uncommitted", "implemented_local_commit_unpushed", "implementation_detected", "in_progress_agent",
     }
     attention = bool(global_blockers or global_test_failures or status_counts["blocked"] or status_counts["test_failing"])
     active = bool(git_state.get("dirty") or any(status_counts[status] for status in active_statuses))
-
     project_state = "attention" if attention else ("active" if active else "quiet")
-    project_state_label = {
-        "attention": "需要关注",
-        "active": "开发活跃",
-        "quiet": "暂无明显开发活动",
-    }[project_state]
 
     return {
-        "version": 1,
-        "scope": "local_evidence_only",
+        "version": 1, "scope": "local_evidence_only", "memory_mode": memory_mode,
         "project_state": project_state,
-        "project_state_label": project_state_label,
+        "project_state_label": {"attention": "需要关注", "active": "开发活跃", "quiet": "暂无明显开发活动"}[project_state],
         "formal_completion_supported": False,
-        "formal_completion_reason": "尚未接入远端PR/MR、CI和部署证据，当前只判断本地开发状态。",
+        "formal_completion_reason": "尚未接入PR/MR、CI和部署证据，当前只判断本地开发状态。",
         "summary": {
-            "work_item_count": len(work_items),
-            "status_counts": dict(status_counts),
-            "git_dirty": bool(git_state.get("dirty")),
-            "git_ahead": git_state.get("ahead"),
-            "git_behind": git_state.get("behind"),
-            "agent_event_count": len(agent_events),
-            "unlinked_code_change_count": len(unlinked_code),
-            "unlinked_agent_event_count": len(unlinked_agent),
-            "unlinked_test_count": len(unlinked_tests),
-            "unlinked_blocker_count": len(unlinked_blockers),
-            "global_test_failure_count": len(global_test_failures),
-            "global_blocker_count": len(global_blockers),
+            "work_item_count": len(work_items), "status_counts": dict(status_counts),
+            "git_dirty": bool(git_state.get("dirty")), "git_ahead": git_state.get("ahead"), "git_behind": git_state.get("behind"),
+            "agent_event_count": len(agent_events), "unlinked_code_change_count": len(unlinked_code),
+            "unlinked_agent_event_count": len(unlinked_agent), "unlinked_test_count": len(unlinked_tests),
+            "unlinked_blocker_count": len(unlinked_blockers), "unlinked_progress_count": len(unlinked_progress),
+            "global_test_failure_count": len(global_test_failures), "global_blocker_count": len(global_blockers),
         },
         "work_items": work_items,
         "unlinked_evidence": {
-            "code_changes": unlinked_code[:100],
-            "agent_events": unlinked_agent[:100],
-            "tests": unlinked_tests[:100],
-            "blockers": unlinked_blockers[:100],
+            "code_changes": unlinked_code[:100], "agent_events": unlinked_agent[:100], "tests": unlinked_tests[:100],
+            "blockers": unlinked_blockers[:100], "progress": unlinked_progress[:100],
         },
-        "global_blockers": global_blockers[:50],
-        "global_test_failures": global_test_failures[:50],
+        "global_blockers": global_blockers[:50], "global_test_failures": global_test_failures[:50],
     }
