@@ -100,3 +100,11 @@ loadSettings = async function loadSettingsWithModel() {
 
 modelEls.test?.addEventListener('click', testModelConfig);
 modelEls.save?.addEventListener('click', saveModelConfig);
+
+if (!document.querySelector('script[data-settings-nodes]')) {
+  const nodeScript = document.createElement('script');
+  nodeScript.src = '/settings-nodes.js';
+  nodeScript.dataset.settingsNodes = '1';
+  nodeScript.async = false;
+  document.body.appendChild(nodeScript);
+}
