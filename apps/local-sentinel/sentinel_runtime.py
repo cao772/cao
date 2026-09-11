@@ -4,6 +4,8 @@ import copy
 import json
 import re
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,44 @@ def load_bindings() -> dict[str, Any]:
         return {"version": 1, "projects": {}}
     data.setdefault("projects", {})
     return data
+
+
+def load_central_project_settings() -> dict[str, dict[str, Any]]:
+    if not sentinel.CENTRAL_URL or not sentinel.COLLECTOR_TOKEN:
+        return {}
+    request = urllib.request.Request(
+        f"{sentinel.CENTRAL_URL}/api/v1/internal/projects/runtime-settings",
+        headers={
+            "Accept": "application/json",
+            "X-Collector-Token": sentinel.COLLECTOR_TOKEN,
+            "User-Agent": "project-sentinel-runtime/0.6",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+        return {}
+    projects = payload.get("projects") if isinstance(payload, dict) else None
+    return projects if isinstance(projects, dict) else {}
+
+
+def merged_runtime_bindings() -> dict[str, Any]:
+    bindings = load_bindings()
+    projects = bindings.setdefault("projects", {})
+    for project_id, settings in load_central_project_settings().items():
+        if not isinstance(settings, dict):
+            continue
+        project_cfg = projects.setdefault(str(project_id), {})
+        project_cfg["policy"] = {
+            "enabled": bool(settings.get("enabled", True)),
+            "security_mode": settings.get("security_mode") or "metadata_only",
+            "analysis_enabled": bool(settings.get("analysis_enabled", False)),
+            "use_llm": bool(settings.get("use_llm", False)),
+            "include": settings.get("include") or ["documents", "tests", "outputs"],
+        }
+    return bindings
 
 
 def _runtime_repositories(project_root: Path, code_paths: list[str]) -> list[dict[str, Any]]:
@@ -134,8 +174,6 @@ def apply_runtime_bindings(project_root: Path, manifest: dict[str, Any], binding
             paths[key] = list(dict.fromkeys(values))
             applied_count += len(values)
 
-    # Folder selection controls scope. Analysis policy is applied separately and never
-    # enables source-code body upload or code-body LLM analysis.
     runtime_repositories = _runtime_repositories(project_root, selected["code"])
     if runtime_repositories:
         effective["repositories"] = runtime_repositories
@@ -196,7 +234,7 @@ def build_managed_manifest(project_id: str, project_cfg: dict[str, Any]) -> dict
 
 
 def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
-    bindings = load_bindings()
+    bindings = merged_runtime_bindings()
     binding_projects = bindings.get("projects") or {}
     matched = uploaded = skipped_disabled = 0
     projects = sentinel.discover_projects()
@@ -221,8 +259,6 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
         if sentinel.upload_snapshot(snapshot):
             uploaded += 1
 
-    # Platform-created projects do not need a project.yaml before their first scan.
-    # Only folders explicitly selected through Local Control are considered.
     for raw_project_id, project_cfg in binding_projects.items():
         project_id = str(raw_project_id)
         if project_id in discovered_ids:
