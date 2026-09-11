@@ -123,7 +123,7 @@ async function createBusinessProject() {
     setInlineMessage(businessProjectEls.message, `${editing ? '保存' : '创建'}失败：${error.message}`, true);
   } finally {
     setBusy(businessProjectEls.create, false);
-    if (editingBusinessProjectId) businessProjectEls.create.textContent = '保存修改';
+    businessProjectEls.create.textContent = editingBusinessProjectId ? '保存修改' : '创建业务项目';
   }
 }
 
