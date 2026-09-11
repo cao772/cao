@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import local_control
 import sentinel_runtime
@@ -87,6 +88,28 @@ def test_managed_manifest_can_enable_local_document_analysis_without_source_uplo
     assert manifest["analysis"]["include"] == ["documents"]
 
 
+def test_central_model_config_updates_runtime_environment(monkeypatch):
+    monkeypatch.setattr(
+        sentinel_runtime,
+        "_central_json",
+        lambda path, timeout=8: {
+            "configured": True,
+            "base_url": "https://model.example.test/v1",
+            "model": "deep-model",
+            "api_key": "runtime-secret",
+            "allow_remote_endpoint": True,
+            "timeout_seconds": 75,
+        },
+    )
+    result = sentinel_runtime.apply_central_model_config()
+    assert result == {"configured": True, "source": "platform", "model": "deep-model"}
+    assert os.environ["LOCAL_LLM_BASE_URL"] == "https://model.example.test/v1"
+    assert os.environ["LOCAL_LLM_MODEL"] == "deep-model"
+    assert os.environ["LOCAL_LLM_API_KEY"] == "runtime-secret"
+    assert os.environ["LOCAL_LLM_TIMEOUT"] == "75"
+    assert os.environ["ALLOW_REMOTE_ANALYSIS_ENDPOINT"] == "true"
+
+
 def test_scan_once_emits_managed_project_without_manifest(tmp_path, monkeypatch):
     projects = tmp_path / "projects"
     selected = projects / "new-project"
@@ -118,6 +141,7 @@ def test_scan_once_emits_managed_project_without_manifest(tmp_path, monkeypatch)
     captured = []
     monkeypatch.setattr(sentinel_runtime.sentinel, "upload_snapshot", lambda snapshot: captured.append(snapshot) or True)
     monkeypatch.setattr(sentinel_runtime.sentinel, "utc_now", lambda: "2026-09-11T00:00:00Z")
+    monkeypatch.setattr(sentinel_runtime, "apply_central_model_config", lambda: {"configured": False, "source": "environment"})
 
     result = sentinel_runtime.scan_once("new-project")
     assert result["matched"] == 1
@@ -155,6 +179,7 @@ def test_disabled_project_is_not_scanned(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(sentinel_runtime.sentinel, "upload_snapshot", lambda snapshot: (_ for _ in ()).throw(AssertionError("should not upload")))
     monkeypatch.setattr(sentinel_runtime.sentinel, "utc_now", lambda: "2026-09-11T00:00:00Z")
+    monkeypatch.setattr(sentinel_runtime, "apply_central_model_config", lambda: {"configured": False, "source": "environment"})
 
     result = sentinel_runtime.scan_once("new-project")
     assert result["matched"] == 0
