@@ -37,10 +37,12 @@ def test_same_series_latest_drives_current_and_old_versions_remain_history():
 def test_series_normalizes_copy_version_and_date_noise_without_merging_unrelated_files():
     assert series_key("需求说明.xlsx") == series_key("副本需求说明(1)最终版v2 0908.xlsx")
     assert series_key("问题反馈表.xlsx") == series_key("副本问题反馈表(5).xlsx")
+    assert series_key("附件4：AI算法-需求功能清单V3_6.xlsx") == series_key("附件4：AI算法-需求功能清单V4_3.xlsx")
+    assert "需求功能清单" in series_key("附件4：AI算法-需求功能清单V4_3.xlsx")
     assert series_key("需求说明.xlsx") != series_key("问题反馈表.xlsx")
 
 
-def test_filename_date_patterns_and_issue_are_recognized():
+def test_filename_date_patterns_and_issue_are_recognized_without_treating_obvious_ids_as_dates():
     cases = [
         ("2026-09-10周报.docx", 20260910),
         ("周报20260910.docx", 20260910),
@@ -54,6 +56,22 @@ def test_filename_date_patterns_and_issue_are_recognized():
     for name, expected in cases:
         assert infer_temporal_hints(name)["date_value"] == expected
     assert infer_temporal_hints("项目周报第5期.docx")["issue"] == 5
+    assert infer_temporal_hints("设备型号0908说明.xlsx")["date_value"] is None
+    assert infer_temporal_hints("工单编号0821反馈.xlsx")["date_value"] is None
+
+
+def test_issue_number_beats_file_mtime_when_no_higher_priority_date_exists():
+    memory = build_current_project_memory(
+        {
+            "enabled": True,
+            "items": [
+                _item("项目周报第5期.docx", "report", "第5期", modified_at="2026-09-11T12:00:00"),
+                _item("项目周报第6期.docx", "report", "第6期", modified_at="2026-09-01T12:00:00"),
+            ],
+        },
+        reference_year=2026,
+    )
+    assert memory["version_families"][0]["current"].endswith("第6期.docx")
 
 
 def test_body_date_has_priority_over_filename_and_file_mtime():
