@@ -39,6 +39,7 @@ jobs:
         run: |
           node --check apps/web/app.js
           node --check apps/web/settings.js
+          node --check apps/web/settings-local-scope.js
 
       - name: Validate configs
         env:
