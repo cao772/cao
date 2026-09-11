@@ -29,6 +29,7 @@ def test_managed_project_binding_without_project_yaml_is_allowed(tmp_path, monke
     result = local_control.put_bindings("new-project", payload)
     assert result["saved"] is True
     assert result["project_name"] == "新业务项目"
+    assert result["policy"]["security_mode"] == "metadata_only"
     stored = json.loads((state / "local-project-bindings.json").read_text(encoding="utf-8"))
     assert len(stored["projects"]["new-project"]["folders"]) == 2
 
@@ -56,6 +57,34 @@ def test_managed_manifest_stays_metadata_only_and_uses_selected_paths(tmp_path, 
     assert manifest["paths"]["documents"] == ["docs-a"]
     assert manifest["security"]["mode"] == "metadata_only"
     assert manifest["analysis"]["enabled"] is False
+
+
+def test_managed_manifest_can_enable_local_document_analysis_without_source_upload(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    docs = projects / "docs-a"
+    docs.mkdir(parents=True)
+    monkeypatch.setattr(sentinel_runtime.sentinel, "PROJECTS_ROOT", projects)
+
+    manifest = sentinel_runtime.build_managed_manifest(
+        "new-project",
+        {
+            "project_name": "新业务项目",
+            "folders": [{"path": "docs-a", "role": "documents"}],
+            "policy": {
+                "enabled": True,
+                "security_mode": "local_analysis",
+                "analysis_enabled": True,
+                "use_llm": True,
+                "include": ["documents"],
+            },
+        },
+    )
+    assert manifest["security"]["mode"] == "local_analysis"
+    assert manifest["security"]["upload_source_code"] is False
+    assert manifest["security"]["upload_documents"] is False
+    assert manifest["analysis"]["enabled"] is True
+    assert manifest["analysis"]["use_llm"] is True
+    assert manifest["analysis"]["include"] == ["documents"]
 
 
 def test_scan_once_emits_managed_project_without_manifest(tmp_path, monkeypatch):
@@ -96,3 +125,38 @@ def test_scan_once_emits_managed_project_without_manifest(tmp_path, monkeypatch)
     assert captured[0]["project_id"] == "new-project"
     assert captured[0]["workspace_name"] == "configured:new-project"
     assert captured[0]["local_binding_overlay"]["managed_without_manifest"] is True
+
+
+def test_disabled_project_is_not_scanned(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    selected = projects / "new-project"
+    selected.mkdir(parents=True)
+    monkeypatch.setattr(sentinel_runtime.sentinel, "PROJECTS_ROOT", projects)
+    monkeypatch.setattr(sentinel_runtime.sentinel, "discover_projects", lambda: [])
+    monkeypatch.setattr(
+        sentinel_runtime,
+        "load_bindings",
+        lambda: {
+            "version": 1,
+            "projects": {
+                "new-project": {
+                    "project_name": "新业务项目",
+                    "folders": [{"path": "new-project", "role": "documents"}],
+                    "policy": {
+                        "enabled": False,
+                        "security_mode": "metadata_only",
+                        "analysis_enabled": False,
+                        "use_llm": False,
+                        "include": ["documents"],
+                    },
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(sentinel_runtime.sentinel, "upload_snapshot", lambda snapshot: (_ for _ in ()).throw(AssertionError("should not upload")))
+    monkeypatch.setattr(sentinel_runtime.sentinel, "utc_now", lambda: "2026-09-11T00:00:00Z")
+
+    result = sentinel_runtime.scan_once("new-project")
+    assert result["matched"] == 0
+    assert result["uploaded"] == 0
+    assert result["skipped_disabled"] == 1
