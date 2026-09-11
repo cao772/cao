@@ -3,6 +3,7 @@ const localFolderSearchField = document.createElement('label');
 localFolderSearchField.className = 'field search-field local-folder-search-field';
 localFolderSearchField.innerHTML = '<span>筛选本机目录</span><input id="local-folder-search" type="search" placeholder="输入文件夹名称或路径" autocomplete="off" />';
 if (localToolbar && settingsEls.localRefresh) {
+  localToolbar.style.gridTemplateColumns = 'minmax(220px, .8fr) minmax(260px, 1.2fr) auto';
   localToolbar.insertBefore(localFolderSearchField, settingsEls.localRefresh);
 }
 const localFolderSearch = document.getElementById('local-folder-search');
