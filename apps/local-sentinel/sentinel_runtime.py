@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -30,12 +31,39 @@ def load_bindings() -> dict[str, Any]:
     return data
 
 
+def _runtime_repositories(project_root: Path, code_paths: list[str]) -> list[dict[str, Any]]:
+    repositories: list[dict[str, Any]] = []
+    for index, relative in enumerate(code_paths):
+        candidate = (project_root / relative).resolve()
+        if not (candidate / ".git").exists():
+            continue
+        _, remote = sentinel.run_git(candidate, "remote", "get-url", "origin")
+        provider = "other"
+        lowered = remote.lower()
+        if "gitlab" in lowered or "git.hyetec.com" in lowered:
+            provider = "gitlab"
+        elif "github.com" in lowered:
+            provider = "github"
+        safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", Path(relative).name).strip("-") or f"repo-{index + 1}"
+        repositories.append(
+            {
+                "id": f"local-{safe_name}",
+                "role": "application",
+                "provider": provider,
+                "url": remote or f"local://{relative}",
+                "local_path": relative,
+                "primary": index == 0,
+            }
+        )
+    return repositories
+
+
 def apply_runtime_bindings(project_root: Path, manifest: dict[str, Any], bindings: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     project_id = str((manifest.get("project") or {}).get("id") or "")
     project_cfg = (bindings.get("projects") or {}).get(project_id) or {}
     folders = project_cfg.get("folders") or []
     if not folders:
-        return manifest, {"applied": False, "selected": 0, "ignored_outside_project": []}
+        return manifest, {"applied": False, "selected": 0, "ignored_outside_project": [], "runtime_repositories": 0}
 
     root = project_root.resolve()
     selected: dict[str, list[str]] = {value: [] for value in ROLE_TO_PATH_KEY.values()}
@@ -64,17 +92,25 @@ def apply_runtime_bindings(project_root: Path, manifest: dict[str, Any], binding
             paths[key] = list(dict.fromkeys(values))
             applied_count += len(values)
 
+    # Selected document/test/output folders become the analysis scope. Code selection
+    # affects repository inspection, but does not automatically enable source-body LLM analysis.
     analysis = effective.setdefault("analysis", {})
     include = set(analysis.get("include") or ["documents", "tests", "outputs"])
-    for key in ("documents", "tests", "outputs", "code"):
+    for key in ("documents", "tests", "outputs"):
         if selected.get(key):
             include.add(key)
     analysis["include"] = [key for key in ("documents", "tests", "outputs", "code") if key in include]
+
+    runtime_repositories = _runtime_repositories(project_root, selected["code"])
+    if runtime_repositories:
+        effective["repositories"] = runtime_repositories
+        effective.pop("repository", None)
 
     return effective, {
         "applied": bool(applied_count),
         "selected": applied_count,
         "ignored_outside_project": outside,
+        "runtime_repositories": len(runtime_repositories),
     }
 
 
