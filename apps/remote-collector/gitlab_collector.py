@@ -24,7 +24,7 @@ POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 INITIAL_LOOKBACK_HOURS = int(os.getenv("INITIAL_LOOKBACK_HOURS", "24"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
 MAX_PAGES = int(os.getenv("GITLAB_MAX_PAGES", "20"))
-COLLECTOR_VERSION = "0.4.0"
+COLLECTOR_VERSION = "0.4.1"
 TASK_ID_RE = re.compile(r"\b([A-Z][A-Z0-9_]{1,20}-\d+)\b")
 
 
@@ -88,9 +88,10 @@ def _central_runtime_config() -> dict[str, Any] | None:
         if isinstance(setting, dict) and setting.get("enabled") is False:
             continue
         projects.append(project)
-    if not projects:
-        return None
 
+    # Central configuration remains authoritative even when every managed project is
+    # disabled. Returning an empty registry prevents the collector from falling back to
+    # the bootstrap YAML and accidentally resuming collection for disabled projects.
     GITLAB_BASE_URL = base_url
     GITLAB_TOKEN = token
     return {"version": 1, "projects": projects}
