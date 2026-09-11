@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 研发协同管理平台</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/settings.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -20,13 +21,19 @@
       <div class="sidebar-section-title">项目</div>
       <nav id="project-list" class="project-list"></nav>
 
+      <div class="sidebar-section-title platform-title">平台</div>
+      <button id="settings-nav" class="project-item settings-nav" type="button">
+        <span class="name">平台配置</span>
+        <span class="meta"><span>接入与采集</span><span>⚙</span></span>
+      </button>
+
       <div class="sidebar-footer">
         <span id="api-state" class="health-dot"></span>
         <span id="api-state-text">连接服务...</span>
       </div>
     </aside>
 
-    <main class="main">
+    <main id="dashboard-view" class="main">
       <header class="topbar">
         <div>
           <div class="eyebrow">AI DEV MANAGEMENT</div>
@@ -82,9 +89,109 @@
         </div>
       </section>
     </main>
+
+    <main id="settings-view" class="main settings-main hidden">
+      <header class="topbar settings-topbar">
+        <div>
+          <div class="eyebrow">PLATFORM SETTINGS</div>
+          <h2>平台配置</h2>
+          <p>管理代码平台、项目绑定和本机采集范围</p>
+        </div>
+        <span id="settings-status" class="badge neutral">等待加载</span>
+      </header>
+
+      <section class="settings-stack">
+        <div class="panel settings-card">
+          <div class="settings-card-head">
+            <div>
+              <h3>GitLab 接入</h3>
+              <p>配置一次后，可检索当前账号有权限访问的项目。</p>
+            </div>
+            <div id="gitlab-connection-state" class="connection-state">未配置</div>
+          </div>
+          <div class="settings-form-grid">
+            <label class="field field-wide">
+              <span>GitLab 地址</span>
+              <input id="gitlab-base-url" type="url" value="http://git.hyetec.com" autocomplete="off" />
+            </label>
+            <label class="field field-wide">
+              <span>Personal Access Token</span>
+              <input id="gitlab-token" type="password" placeholder="输入 read_api Token；保存后不会回显" autocomplete="new-password" />
+              <small id="gitlab-token-hint">尚未配置</small>
+            </label>
+          </div>
+          <div class="settings-actions">
+            <button id="gitlab-test-btn" class="secondary-button" type="button">测试连接</button>
+            <button id="gitlab-save-btn" class="primary-button" type="button">保存并检索项目</button>
+          </div>
+          <div id="gitlab-message" class="inline-message"></div>
+        </div>
+
+        <div class="panel settings-card">
+          <div class="settings-card-head">
+            <div>
+              <h3>项目接入与绑定</h3>
+              <p>一个业务项目可以同时关联多个 GitLab 仓库。</p>
+            </div>
+            <span id="gitlab-project-count" class="badge neutral">0 个项目</span>
+          </div>
+          <div class="binding-toolbar">
+            <label class="field compact-field">
+              <span>业务项目</span>
+              <select id="binding-project-select"></select>
+            </label>
+            <label class="field search-field">
+              <span>筛选 GitLab 项目</span>
+              <input id="gitlab-project-search" type="search" placeholder="输入名称或 namespace" />
+            </label>
+            <button id="gitlab-discover-btn" class="secondary-button align-bottom" type="button">重新检索</button>
+          </div>
+          <div id="gitlab-project-table" class="repo-table-wrap">
+            <div class="empty">保存 GitLab 配置后检索项目</div>
+          </div>
+          <div class="settings-actions right-actions">
+            <button id="binding-save-btn" class="primary-button" type="button">保存仓库绑定</button>
+          </div>
+        </div>
+
+        <div class="panel settings-card">
+          <div class="settings-card-head">
+            <div>
+              <h3>本机采集</h3>
+              <p>选择这台电脑已授权给 Docker 的多个目录，并设置各目录用途。</p>
+            </div>
+            <div id="local-control-state" class="connection-state">正在检测本机服务</div>
+          </div>
+          <div id="local-info" class="local-info-strip"></div>
+          <div class="binding-toolbar local-toolbar">
+            <label class="field compact-field">
+              <span>业务项目</span>
+              <select id="local-project-select"></select>
+            </label>
+            <button id="local-refresh-btn" class="secondary-button align-bottom" type="button">刷新目录</button>
+          </div>
+          <div class="local-browser-layout">
+            <div>
+              <div class="subsection-title">可选择目录</div>
+              <div id="local-folder-tree" class="folder-tree"><div class="empty">正在读取本机目录</div></div>
+            </div>
+            <div>
+              <div class="subsection-title">已选择采集范围</div>
+              <div id="local-selection" class="selection-list"><div class="empty">尚未选择目录</div></div>
+            </div>
+          </div>
+          <div class="settings-actions right-actions">
+            <button id="local-save-btn" class="secondary-button" type="button">保存采集范围</button>
+            <button id="local-scan-btn" class="primary-button" type="button">立即重新采集</button>
+          </div>
+          <div id="local-message" class="inline-message"></div>
+        </div>
+      </section>
+    </main>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/app.js"></script>
+  <script src="/settings.js"></script>
 </body>
 </html>
