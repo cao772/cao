@@ -87,6 +87,37 @@ def test_runtime_registry_filters_disabled_projects(monkeypatch, tmp_path):
     assert [item["project_id"] for item in config["projects"]] == ["active"]
 
 
+def test_runtime_registry_with_all_projects_disabled_does_not_fall_back_to_yaml(monkeypatch, tmp_path):
+    runtime = {
+        "configured": True,
+        "version": 1,
+        "gitlab_base_url": "http://git.runtime.test",
+        "gitlab_token": "runtime-token",
+        "projects": [
+            {"project_id": "disabled", "project_name": "停用", "repositories": [{"id": "r2", "provider": "gitlab"}]},
+        ],
+    }
+    settings = {"version": 1, "projects": {"disabled": {"enabled": False}}}
+    config_path = tmp_path / "gitlab-projects.yaml"
+    config_path.write_text(
+        "version: 1\nprojects:\n  - project_id: fallback-should-not-run\n    repositories: []\n",
+        encoding="utf-8",
+    )
+
+    def fake_urlopen(request, timeout):
+        if request.full_url.endswith("/api/v1/internal/projects/runtime-settings"):
+            return FakeResponse(settings)
+        return FakeResponse(runtime)
+
+    monkeypatch.setattr(gitlab_collector, "CENTRAL_URL", "http://server:8080")
+    monkeypatch.setattr(gitlab_collector, "COLLECTOR_TOKEN", "collector-secret")
+    monkeypatch.setattr(gitlab_collector, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(gitlab_collector.urllib.request, "urlopen", fake_urlopen)
+
+    config = gitlab_collector.load_config()
+    assert config["projects"] == []
+
+
 def test_load_config_falls_back_to_yaml_when_runtime_not_configured(monkeypatch, tmp_path):
     config_path = tmp_path / "gitlab-projects.yaml"
     config_path.write_text(
