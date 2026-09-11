@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import time
 import urllib.error
@@ -34,25 +35,47 @@ def load_bindings() -> dict[str, Any]:
     return data
 
 
-def load_central_project_settings() -> dict[str, dict[str, Any]]:
+def _central_json(path: str, timeout: int = 8) -> dict[str, Any] | None:
     if not sentinel.CENTRAL_URL or not sentinel.COLLECTOR_TOKEN:
-        return {}
+        return None
     request = urllib.request.Request(
-        f"{sentinel.CENTRAL_URL}/api/v1/internal/projects/runtime-settings",
+        f"{sentinel.CENTRAL_URL}{path}",
         headers={
             "Accept": "application/json",
             "X-Collector-Token": sentinel.COLLECTOR_TOKEN,
-            "User-Agent": "project-sentinel-runtime/0.6",
+            "User-Agent": "project-sentinel-runtime/0.7",
         },
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
-        return {}
-    projects = payload.get("projects") if isinstance(payload, dict) else None
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def load_central_project_settings() -> dict[str, dict[str, Any]]:
+    payload = _central_json("/api/v1/internal/projects/runtime-settings") or {}
+    projects = payload.get("projects")
     return projects if isinstance(projects, dict) else {}
+
+
+def apply_central_model_config() -> dict[str, Any]:
+    """Refresh model settings from Central, keeping existing env values as fallback."""
+    payload = _central_json("/api/v1/internal/model/runtime-config")
+    if not payload or not payload.get("configured"):
+        return {"configured": False, "source": "environment"}
+    base_url = str(payload.get("base_url") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    if not base_url or not model:
+        return {"configured": False, "source": "environment"}
+    os.environ["LOCAL_LLM_BASE_URL"] = base_url
+    os.environ["LOCAL_LLM_MODEL"] = model
+    os.environ["LOCAL_LLM_API_KEY"] = str(payload.get("api_key") or "")
+    os.environ["LOCAL_LLM_TIMEOUT"] = str(int(payload.get("timeout_seconds") or 60))
+    os.environ["ALLOW_REMOTE_ANALYSIS_ENDPOINT"] = "true" if payload.get("allow_remote_endpoint") else "false"
+    return {"configured": True, "source": "platform", "model": model}
 
 
 def merged_runtime_bindings() -> dict[str, Any]:
@@ -234,6 +257,7 @@ def build_managed_manifest(project_id: str, project_cfg: dict[str, Any]) -> dict
 
 
 def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
+    model_runtime = apply_central_model_config()
     bindings = merged_runtime_bindings()
     binding_projects = bindings.get("projects") or {}
     matched = uploaded = skipped_disabled = 0
@@ -256,6 +280,7 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
         effective, overlay = apply_runtime_bindings(project_root, manifest, bindings)
         snapshot = sentinel.build_snapshot(project_root, effective)
         snapshot["local_binding_overlay"] = overlay
+        snapshot["model_runtime"] = {"configured": bool(model_runtime.get("configured")), "source": model_runtime.get("source")}
         if sentinel.upload_snapshot(snapshot):
             uploaded += 1
 
@@ -283,6 +308,7 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
             "managed_without_manifest": True,
             "policy": policy,
         }
+        snapshot["model_runtime"] = {"configured": bool(model_runtime.get("configured")), "source": model_runtime.get("source")}
         if sentinel.upload_snapshot(snapshot):
             uploaded += 1
 
@@ -290,6 +316,7 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
         "matched": matched,
         "uploaded": uploaded,
         "skipped_disabled": skipped_disabled,
+        "model_configured": bool(model_runtime.get("configured")),
         "at": sentinel.utc_now(),
     }
 
