@@ -38,7 +38,9 @@ def test_symlink_escape_is_rejected(tmp_path, monkeypatch):
 def test_runtime_bindings_override_selected_path_roles(tmp_path, monkeypatch):
     projects = tmp_path / "projects"
     root = projects / "low-voltage"
-    (root / "algorithm").mkdir(parents=True)
+    algorithm = root / "algorithm"
+    algorithm.mkdir(parents=True)
+    (algorithm / ".git").mkdir()
     (root / "资料").mkdir()
     monkeypatch.setattr(sentinel_runtime.sentinel, "PROJECTS_ROOT", projects)
     manifest = {
@@ -61,7 +63,9 @@ def test_runtime_bindings_override_selected_path_roles(tmp_path, monkeypatch):
     effective, meta = sentinel_runtime.apply_runtime_bindings(root, manifest, bindings)
     assert effective["paths"]["code"] == ["algorithm"]
     assert effective["paths"]["documents"] == ["资料"]
-    assert "code" in effective["analysis"]["include"]
+    assert "code" not in effective["analysis"]["include"]
+    assert effective["repositories"][0]["local_path"] == "algorithm"
+    assert meta["runtime_repositories"] == 1
     assert meta["selected"] == 2
     assert manifest["paths"]["code"] == ["old-code"]
 
