@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -16,7 +17,9 @@ def _resolve_projection_people(projection: dict[str, Any]) -> dict[str, Any]:
 
     Explicit person_id supplied by an Agent event wins. Otherwise the raw user_id is
     resolved through the People identity rules. Unresolved identities stay null; we
-    never infer a GitLab/GitHub identity from a similar username here.
+    never infer a GitLab/GitHub identity from a similar username here. Identity
+    projection is enrichment, so an unavailable People store must not break the
+    Agent Session API.
     """
     user_ids = sorted(
         {
@@ -28,17 +31,21 @@ def _resolve_projection_people(projection: dict[str, Any]) -> dict[str, Any]:
     if not user_ids:
         return projection
 
-    resolved = resolve_contributors(
-        [
-            {
-                "user_id": user_id,
-                "display_name": user_id,
-                "source_types": ["agent"],
-                "identity_refs": [{"provider": "agent", "external_id": user_id}],
-            }
-            for user_id in user_ids
-        ]
-    )
+    try:
+        resolved = resolve_contributors(
+            [
+                {
+                    "user_id": user_id,
+                    "display_name": user_id,
+                    "source_types": ["agent"],
+                    "identity_refs": [{"provider": "agent", "external_id": user_id}],
+                }
+                for user_id in user_ids
+            ]
+        )
+    except (OSError, sqlite3.Error):
+        return projection
+
     person_by_user = {
         str(item.get("user_id") or ""): item.get("person_id")
         for item in resolved
