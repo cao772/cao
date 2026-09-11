@@ -114,12 +114,62 @@ def apply_runtime_bindings(project_root: Path, manifest: dict[str, Any], binding
     }
 
 
+def build_managed_manifest(project_id: str, project_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Build a conservative manifest for a platform-created project without project.yaml."""
+    folders = [item for item in (project_cfg.get("folders") or []) if isinstance(item, dict)]
+    selected: dict[str, list[str]] = {value: [] for value in ROLE_TO_PATH_KEY.values()}
+    for item in folders:
+        role = str(item.get("role") or "")
+        key = ROLE_TO_PATH_KEY.get(role)
+        raw = str(item.get("path") or "").strip().replace("\\", "/").strip("/")
+        if key and raw:
+            selected[key].append(raw)
+
+    repositories = _runtime_repositories(sentinel.PROJECTS_ROOT, list(dict.fromkeys(selected["code"])))
+    return {
+        "version": 1,
+        "project": {
+            "id": project_id,
+            "name": str(project_cfg.get("project_name") or project_id),
+        },
+        "repositories": repositories,
+        "paths": {key: list(dict.fromkeys(values)) for key, values in selected.items()},
+        "ignore": [
+            "**/.git/**",
+            "**/node_modules/**",
+            "**/.venv/**",
+            "**/__pycache__/**",
+            "**/.DS_Store",
+            "**/.env",
+        ],
+        # A newly configured project starts metadata-only. Adding a project.yaml later
+        # can explicitly opt into document-body / LLM analysis without weakening safety.
+        "security": {
+            "mode": "metadata_only",
+            "scan_env_files": False,
+            "upload_source_code": False,
+            "upload_documents": False,
+        },
+        "analysis": {
+            "enabled": False,
+            "include": [key for key in ("documents", "tests", "outputs") if selected[key]],
+            "use_llm": False,
+        },
+    }
+
+
 def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
     bindings = load_bindings()
+    binding_projects = bindings.get("projects") or {}
     matched = uploaded = 0
     projects = sentinel.discover_projects()
+    discovered_ids: set[str] = set()
+
     for project_root, manifest in projects:
         project_id = str((manifest.get("project") or {}).get("id") or "")
+        if not project_id:
+            continue
+        discovered_ids.add(project_id)
         if only_project_id and project_id != only_project_id:
             continue
         matched += 1
@@ -128,6 +178,31 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
         snapshot["local_binding_overlay"] = overlay
         if sentinel.upload_snapshot(snapshot):
             uploaded += 1
+
+    # Platform-created projects do not need a project.yaml before their first scan.
+    # Only folders explicitly selected through Local Control are considered.
+    for raw_project_id, project_cfg in binding_projects.items():
+        project_id = str(raw_project_id)
+        if project_id in discovered_ids:
+            continue
+        if only_project_id and project_id != only_project_id:
+            continue
+        if not isinstance(project_cfg, dict) or not project_cfg.get("folders"):
+            continue
+        matched += 1
+        manifest = build_managed_manifest(project_id, project_cfg)
+        snapshot = sentinel.build_snapshot(sentinel.PROJECTS_ROOT, manifest)
+        snapshot["workspace_name"] = f"configured:{project_id}"
+        snapshot["local_binding_overlay"] = {
+            "applied": True,
+            "selected": len(project_cfg.get("folders") or []),
+            "ignored_outside_project": [],
+            "runtime_repositories": len(manifest.get("repositories") or []),
+            "managed_without_manifest": True,
+        }
+        if sentinel.upload_snapshot(snapshot):
+            uploaded += 1
+
     return {"matched": matched, "uploaded": uploaded, "at": sentinel.utc_now()}
 
 
