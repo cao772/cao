@@ -24,7 +24,7 @@ POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 INITIAL_LOOKBACK_HOURS = int(os.getenv("INITIAL_LOOKBACK_HOURS", "24"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
 MAX_PAGES = int(os.getenv("GITLAB_MAX_PAGES", "20"))
-COLLECTOR_VERSION = "0.3.0"
+COLLECTOR_VERSION = "0.4.0"
 TASK_ID_RE = re.compile(r"\b([A-Z][A-Z0-9_]{1,20}-\d+)\b")
 
 
@@ -45,13 +45,11 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _central_runtime_config() -> dict[str, Any] | None:
-    """Read decrypted runtime configuration from Central without exposing it to the browser."""
-    global GITLAB_BASE_URL, GITLAB_TOKEN
+def _central_get(path: str) -> dict[str, Any] | None:
     if not CENTRAL_URL or not COLLECTOR_TOKEN:
         return None
     request = urllib.request.Request(
-        f"{CENTRAL_URL}/api/v1/internal/gitlab/runtime-config",
+        f"{CENTRAL_URL}{path}",
         headers={
             "Accept": "application/json",
             "X-Collector-Token": COLLECTOR_TOKEN,
@@ -61,19 +59,41 @@ def _central_runtime_config() -> dict[str, Any] | None:
     )
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
-        print(json.dumps({"level": "warning", "stage": "runtime_config", "error": type(exc).__name__}, ensure_ascii=False))
+        print(json.dumps({"level": "warning", "stage": "central_config", "path": path, "error": type(exc).__name__}, ensure_ascii=False))
         return None
-    if not isinstance(data, dict) or not data.get("configured") or not data.get("projects"):
+    return payload if isinstance(payload, dict) else None
+
+
+def _central_runtime_config() -> dict[str, Any] | None:
+    """Read decrypted runtime configuration from Central without exposing it to the browser."""
+    global GITLAB_BASE_URL, GITLAB_TOKEN
+    data = _central_get("/api/v1/internal/gitlab/runtime-config")
+    if not data or not data.get("configured") or not data.get("projects"):
         return None
     base_url = str(data.get("gitlab_base_url") or "").strip().rstrip("/")
     token = str(data.get("gitlab_token") or "").strip()
     if not base_url or not token:
         return None
+
+    settings_payload = _central_get("/api/v1/internal/projects/runtime-settings") or {}
+    project_settings = settings_payload.get("projects") or {}
+    projects = []
+    for project in data.get("projects") or []:
+        if not isinstance(project, dict):
+            continue
+        project_id = str(project.get("project_id") or "")
+        setting = project_settings.get(project_id) if isinstance(project_settings, dict) else None
+        if isinstance(setting, dict) and setting.get("enabled") is False:
+            continue
+        projects.append(project)
+    if not projects:
+        return None
+
     GITLAB_BASE_URL = base_url
     GITLAB_TOKEN = token
-    return {"version": 1, "projects": data.get("projects") or []}
+    return {"version": 1, "projects": projects}
 
 
 def load_config() -> dict[str, Any]:
