@@ -34,6 +34,17 @@ _GENERIC_M2_RELATIONS = {
     "deployment",
     "progress",
 }
+_STATEFUL_REMOTE_RELATIONS = {
+    "mr_opened",
+    "mr_closed",
+    "mr_merged",
+    "ci_passed",
+    "ci_failed",
+    "ci_running",
+    "deployment_succeeded",
+    "deployment_failed",
+    "deployment_running",
+}
 
 
 def _preferred_relation(entry: dict[str, Any]) -> str:
@@ -98,13 +109,22 @@ def _adjudication_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _raw_identity_with_canonical_relation(entry: dict[str, Any], relation: str) -> str:
-    """Deduplicate on canonical state, not M2's generic relation bucket.
+    """Deduplicate repeated facts without erasing remote lifecycle transitions.
 
-    M2 intentionally exposes both ci.passed and ci.failed as relation=ci (and both
-    deployment outcomes as relation=deployment). They must remain distinct evidence
-    rows so M3 can select the latest outcome by observed_at.
+    M2 intentionally exposes CI/MR/deployment as generic relation buckets. Real
+    providers commonly reuse the same pipeline/deployment/MR identifier while its
+    state changes. Include the canonical state in that identity so a later pass,
+    failure, merge, or deployment outcome survives normalization; exact repeats of
+    the same state still collapse.
     """
     canonical = _canonical_relation(entry)
+    data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+    if canonical in _STATEFUL_REMOTE_RELATIONS:
+        for key in ("pipeline_id", "deployment_id", "id", "iid"):
+            value = data.get(key)
+            if value is not None and str(value).strip():
+                return f"{key}:{value}:{canonical}"
+
     adapted = dict(entry)
     adapted["relation"] = canonical
     adapted["source_type"] = _adjudication_source_type(adapted, canonical)
