@@ -36,7 +36,9 @@ jobs:
         run: python -m pytest -q apps/local-sentinel/tests apps/server/tests apps/remote-collector/tests
 
       - name: Validate dashboard JavaScript
-        run: node --check apps/web/app.js
+        run: |
+          node --check apps/web/app.js
+          node --check apps/web/settings.js
 
       - name: Validate configs
         env:
