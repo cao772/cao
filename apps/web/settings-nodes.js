@@ -1,3 +1,33 @@
+function ensureCollectorNodeCard() {
+  if (document.getElementById('collector-node-list')) return;
+  const stack = document.querySelector('.settings-stack');
+  if (!stack) return;
+  const card = document.createElement('div');
+  card.className = 'panel settings-card';
+  card.innerHTML = `
+    <div class="settings-card-head">
+      <div>
+        <h3>采集节点</h3>
+        <p>查看哪些开发人员电脑已接入、最后采集时间以及参与的项目。</p>
+      </div>
+      <div class="collector-node-head-meta">
+        <div id="collector-node-summary" class="collector-node-summary"></div>
+        <span id="collector-node-count" class="badge neutral">0 个节点</span>
+      </div>
+    </div>
+    <div id="collector-node-list" class="collector-node-list"><div class="empty">正在读取采集节点</div></div>
+    <div class="settings-actions right-actions">
+      <button id="collector-node-refresh-btn" class="secondary-button" type="button">刷新节点状态</button>
+    </div>
+    <div id="collector-node-message" class="inline-message"></div>
+  `;
+  const localCard = [...stack.children].find(item => item.querySelector?.('#local-control-state'));
+  if (localCard) stack.insertBefore(card, localCard);
+  else stack.appendChild(card);
+}
+
+ensureCollectorNodeCard();
+
 const nodeEls = {
   count: document.getElementById('collector-node-count'),
   summary: document.getElementById('collector-node-summary'),
@@ -107,3 +137,7 @@ nodeEls.refresh?.addEventListener('click', async () => {
     setBusy(nodeEls.refresh, false);
   }
 });
+
+if (!document.getElementById('settings-view')?.classList.contains('hidden')) {
+  loadCollectorNodes(false);
+}
