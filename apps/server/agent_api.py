@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import sqlite3
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
+
+import main
+from agent_sessions import build_agent_sessions, get_agent_session
+from people_store import resolve_contributors
+
+router = APIRouter()
+
+
+def _resolve_projection_people(projection: dict[str, Any]) -> dict[str, Any]:
+    """Attach a Person only when M4 already resolves the raw agent user identity.
+
+    Explicit person_id supplied by an Agent event wins. Otherwise the raw user_id is
+    resolved through the People identity rules. Unresolved identities stay null; we
+    never infer a GitLab/GitHub identity from a similar username here. Identity
+    projection is enrichment, so an unavailable People store must not break the
+    Agent Session API.
+    """
+    user_ids = sorted(
+        {
+            str(session.get("user_id") or "").strip()
+            for session in projection.get("sessions") or []
+            if session.get("user_id") and not session.get("person_id")
+        }
+    )
+    if not user_ids:
+        return projection
+
+    try:
+        resolved = resolve_contributors(
+            [
+                {
+                    "user_id": user_id,
+                    "display_name": user_id,
+                    "source_types": ["agent"],
+                    "identity_refs": [{"provider": "agent", "external_id": user_id}],
+                }
+                for user_id in user_ids
+            ]
+        )
+    except (OSError, sqlite3.Error):
+        return projection
+
+    person_by_user = {
+        str(item.get("user_id") or ""): item.get("person_id")
+        for item in resolved
+        if item.get("user_id")
+    }
+    for session in projection.get("sessions") or []:
+        if session.get("person_id"):
+            continue
+        user_id = str(session.get("user_id") or "").strip()
+        if user_id:
+            session["person_id"] = person_by_user.get(user_id)
+    return projection
+
+
+def agent_session_projection(project_id: str, limit: int = 5000) -> dict[str, Any]:
+    projection = build_agent_sessions(
+        main.recent_agent_events(project_id, limit),
+        project_id=project_id,
+        now=main.now_utc(),
+    )
+    return _resolve_projection_people(projection)
+
+
+def _agent_event_project_ids() -> list[str]:
+    with main.get_db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT project_id FROM agent_events ORDER BY project_id ASC"
+        ).fetchall()
+    return [str(row["project_id"]) for row in rows]
+
+
+@router.get("/api/v1/projects/{project_id}/agent-sessions")
+def list_project_agent_sessions(
+    project_id: str,
+    limit: int = Query(default=1000, ge=1, le=5000),
+) -> dict[str, Any]:
+    return agent_session_projection(project_id, limit)
+
+
+@router.get("/api/v1/projects/{project_id}/agents")
+def list_project_agents(
+    project_id: str,
+    limit: int = Query(default=1000, ge=1, le=5000),
+) -> dict[str, Any]:
+    projection = agent_session_projection(project_id, limit)
+    return {
+        "project_id": project_id,
+        "agent_count": projection.get("agent_count", 0),
+        "active_session_count": projection.get("active_session_count", 0),
+        "blocked_session_count": projection.get("blocked_session_count", 0),
+        "agents": projection.get("agents") or [],
+        "flags": projection.get("flags") or [],
+    }
+
+
+@router.get("/api/v1/agent-sessions/{session_id}")
+def get_agent_session_detail(session_id: str) -> dict[str, Any]:
+    for project_id in _agent_event_project_ids():
+        projection = agent_session_projection(project_id, 5000)
+        session = get_agent_session(projection, session_id)
+        if session is None:
+            continue
+        return {
+            "project_id": project_id,
+            "session": session,
+            "evidence": [
+                item
+                for item in (projection.get("evidence") or [])
+                if item.get("session_id") == session_id
+            ],
+            "flags": [
+                item
+                for item in (projection.get("flags") or [])
+                if session_id in (item.get("sessions") or [])
+            ],
+            "formal_completion_supported": False,
+        }
+    raise HTTPException(status_code=404, detail="agent session not found")

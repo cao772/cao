@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+import people_store
 import platform_config
 
 router = APIRouter(prefix="/api/v1")
@@ -88,12 +89,29 @@ def list_nodes() -> list[dict[str, Any]]:
             project["last_seen_at"] = item.get("received_at")
         node["workspace_count"] += 1
 
+    people_payload = people_store.list_people()
+    local_people: dict[str, dict[str, Any]] = {}
+    for person in people_payload.get("people") or []:
+        for identity in person.get("identities") or []:
+            if identity.get("provider") == "local" and identity.get("external_id"):
+                local_people[str(identity["external_id"]).lower()] = person
+    devices = {item["device_id"]: item for item in people_store.list_devices()}
+
     result: list[dict[str, Any]] = []
     for node in grouped.values():
         projects = sorted(node.pop("projects").values(), key=lambda item: str(item.get("project_name") or ""))
         node["projects"] = projects
         node["project_count"] = len(projects)
         node["status"] = _status(node.get("last_seen_at"))
+
+        person = local_people.get(str(node.get("user_id") or "").lower())
+        device = devices.get(str(node.get("device_id") or ""))
+        node["person_id"] = person.get("person_id") if person else None
+        node["display_name"] = person.get("display_name") if person else node.get("user_id")
+        node["identity_status"] = person.get("identity_status") if person else "unconfirmed"
+        node["device_identity_conflict"] = bool((device or {}).get("identity_conflict"))
+        node["conflict_code"] = (device or {}).get("conflict_code")
+        node["collector_version"] = (device or {}).get("collector_version")
         result.append(node)
     return sorted(result, key=lambda item: str(item.get("last_seen_at") or ""), reverse=True)
 
