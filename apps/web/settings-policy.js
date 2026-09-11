@@ -132,10 +132,17 @@ loadSettings = async function loadSettingsWithPolicy() {
   loadSelectedPolicy();
 };
 
-document.addEventListener('project-settings-updated', event => {
+document.addEventListener('project-settings-updated', async event => {
   const detail = event.detail || {};
   if (detail.projectId && detail.settings) settingsState.projectSettings[detail.projectId] = detail.settings;
   if (detail.projectId === currentPolicyProjectId()) applyPolicyControls(detail.settings);
+  if (detail.projectId && detail.settings && settingsState.localOnline) {
+    try {
+      await syncPolicyToLocal(detail.projectId, detail.settings);
+    } catch (error) {
+      setInlineMessage(policyEls.message, `项目状态已保存，但本机同步失败：${error.message}`, true);
+    }
+  }
 });
 policyEls.project?.addEventListener('change', loadSelectedPolicy);
 policyEls.mode?.addEventListener('change', syncPolicyControlState);
