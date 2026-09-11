@@ -68,3 +68,17 @@ jobs:
           docker build -f apps/server/Dockerfile -t ai-dev-server:test .
           docker build -f apps/remote-collector/Dockerfile -t ai-dev-gitlab-collector:test .
           docker build -f apps/web/Dockerfile -t ai-dev-web:test .
+
+      - name: Validate web image assets
+        run: |
+          docker run --rm ai-dev-web:test sh -ec '
+            root=/usr/share/nginx/html
+            for file in \
+              index.html styles.css settings.css app.js settings.js \
+              settings-projects.js settings-local-scope.js settings-policy.js \
+              settings-model.js settings-nodes.js; do
+              test -s "$root/$file"
+            done
+            grep -q "/settings.css" "$root/index.html"
+            grep -q "/settings-nodes.js" "$root/index.html"
+          '
