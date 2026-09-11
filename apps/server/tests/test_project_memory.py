@@ -94,3 +94,15 @@ def test_facts_carry_source_time_and_week_history():
     assert all("source_date" in fact and "freshness" in fact for fact in memory["facts"])
     assert memory["weekly_facts"]
     assert memory["weekly_facts"][0]["week_key"].startswith("2026-W")
+
+
+def test_missing_year_uses_snapshot_year_and_parent_date_is_recognized():
+    memory = build_current_project_memory({"enabled": True, "items": [
+        _item("documents/7.7工作任务.xlsx", "progress", "旧任务进行中", "task"),
+        _item("documents/8.12问题反馈表.xlsx", "test_result", "待核实", "blocker"),
+    ]}, reference_year=2026)
+    assert memory["freshness_reference_date"] == "2026-08-12"
+    assert memory["historical_facts"][0]["source_date"] == "2026-07-07"
+    hints = infer_temporal_hints("outputs/20260908_feature_list/需求功能清单V6.xlsx")
+    assert hints["date_text"] == "2026-09-08"
+    assert infer_temporal_hints("outputs/20260908/周报20260904.docx")["date_text"] == "2026-09-04"

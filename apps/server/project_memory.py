@@ -39,6 +39,8 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
     date_text: str | None = None
 
     absolute = list(FULL_DATE.finditer(name))
+    if not absolute:
+        absolute = list(FULL_DATE.finditer(PurePosixPath(_clean_path(path)).parent.as_posix()))
     if absolute:
         match = absolute[-1]
         year, month, day = map(int, match.groups())
@@ -172,13 +174,13 @@ def _dedupe_facts(facts: list[dict[str, Any]], limit: int = 300) -> list[dict[st
     return result
 
 
-def _reference_year(items: list[dict[str, Any]]) -> int:
+def _reference_year(items: list[dict[str, Any]], fallback_year: int | None = None) -> int:
     years: list[int] = []
     for item in items:
         value = int(infer_temporal_hints(str(item.get("path") or "")).get("date_value") or 0)
         if value >= 10_000_00:
             years.append(value // 10000)
-    return max(years) if years else 2000
+    return max(years) if years else (fallback_year or date.today().year)
 
 
 def _source_date(path: str, reference_year: int, absolute_reference: date | None = None) -> date | None:
@@ -209,7 +211,7 @@ def _week_info(value: date) -> dict[str, str]:
     }
 
 
-def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
+def build_current_project_memory(analysis: dict[str, Any], *, reference_year: int | None = None) -> dict[str, Any]:
     """Build a current view while retaining old material as history.
 
     Newest file in each logical series wins. On top of version selection, dated
@@ -244,7 +246,7 @@ def build_current_project_memory(analysis: dict[str, Any]) -> dict[str, Any]:
             )
 
     current_items.sort(key=freshness_sort_key, reverse=True)
-    reference_year = _reference_year(current_items)
+    reference_year = _reference_year(current_items, reference_year)
     absolute_dates = [
         _source_date(str(item.get("path") or ""), reference_year)
         for item in current_items
@@ -399,6 +401,11 @@ def enrich_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
     analysis = result.get("analysis") or {}
     if analysis.get("enabled"):
         enriched_analysis = dict(analysis)
-        enriched_analysis["current_project_memory"] = build_current_project_memory(analysis)
+        observed = str(result.get("observed_at") or "")
+        try:
+            snapshot_year = date.fromisoformat(observed[:10]).year
+        except ValueError:
+            snapshot_year = date.today().year
+        enriched_analysis["current_project_memory"] = build_current_project_memory(analysis, reference_year=snapshot_year)
         result["analysis"] = enriched_analysis
     return result
