@@ -1,3 +1,25 @@
+function ensureCollectorNodeStyles() {
+  if (document.getElementById('collector-node-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'collector-node-styles';
+  style.textContent = `
+    .collector-node-head-meta { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .collector-node-summary { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+    .collector-node-list { margin:18px 20px 0; border:1px solid #dfe7ef; border-radius:8px; overflow:hidden; background:#fbfcfe; }
+    .collector-node-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:18px; align-items:center; padding:14px 16px; border-bottom:1px solid #e9eef3; background:#fff; }
+    .collector-node-item:last-child { border-bottom:0; }
+    .collector-node-main { min-width:0; display:grid; gap:8px; }
+    .collector-node-title { display:flex; align-items:baseline; gap:10px; min-width:0; }
+    .collector-node-title strong { color:#254a6d; font-size:13px; }
+    .collector-node-title span { color:#8293a4; font-size:11px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .collector-node-projects { display:flex; gap:6px; flex-wrap:wrap; }
+    .node-project-pill { display:inline-flex; align-items:center; max-width:260px; padding:3px 8px; border:1px solid #d5e1ec; border-radius:999px; background:#f6f9fc; color:#56718a; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .collector-node-meta { display:grid; justify-items:end; gap:4px; color:#7b8da0; font-size:10px; white-space:nowrap; }
+    @media (max-width: 980px) { .collector-node-item { grid-template-columns:1fr; } .collector-node-meta { justify-items:start; white-space:normal; } }
+  `;
+  document.head.appendChild(style);
+}
+
 function ensureCollectorNodeCard() {
   if (document.getElementById('collector-node-list')) return;
   const stack = document.querySelector('.settings-stack');
@@ -26,6 +48,7 @@ function ensureCollectorNodeCard() {
   else stack.appendChild(card);
 }
 
+ensureCollectorNodeStyles();
 ensureCollectorNodeCard();
 
 const nodeEls = {
