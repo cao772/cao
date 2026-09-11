@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +15,13 @@ from pydantic import BaseModel, Field
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
 STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
 BINDINGS_PATH = STATE_ROOT / "local-project-bindings.json"
+CENTRAL_URL = os.getenv("CENTRAL_URL", "").rstrip("/")
 USER_ID = os.getenv("USER_ID", "developer")
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 HIDDEN_NAMES = {".git", "node_modules", ".venv", "__pycache__", ".DS_Store"}
 VALID_ROLES = {"code", "documents", "tests", "outputs"}
 
-app = FastAPI(title="Project Sentinel Local Control", version="0.3.0")
+app = FastAPI(title="Project Sentinel Local Control", version="0.3.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8088", "http://localhost:8088"],
@@ -91,6 +94,26 @@ def _find_project_root(project_id: str) -> Path | None:
     for item in _discover_local_projects():
         if item["project_id"] == project_id:
             return (PROJECTS_ROOT / item["root"]).resolve()
+    return None
+
+
+def _central_project_name(project_id: str) -> str | None:
+    if not CENTRAL_URL:
+        return None
+    request = urllib.request.Request(
+        f"{CENTRAL_URL}/api/v1/platform/projects",
+        headers={"Accept": "application/json", "User-Agent": "project-sentinel-local-control/0.3"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+    for item in payload.get("projects") or []:
+        if str(item.get("project_id") or "") == project_id:
+            name = str(item.get("project_name") or "").strip()
+            return name or None
     return None
 
 
@@ -184,7 +207,6 @@ def local_folders(
                 "available": True,
                 "scope": "project",
             }
-        # 平台手工创建项目还没有 project.yaml 时，仍允许从 Docker 已授权的 /projects 范围选择目录。
         return {
             "root": "/projects",
             "folders": _top_level_folders(depth, max_children),
@@ -228,7 +250,12 @@ def put_bindings(project_id: str, payload: FolderBindingSet) -> dict[str, Any]:
     data = _load_bindings()
     projects = data.setdefault("projects", {})
     existing = projects.get(project_id) or {}
-    project_name = (payload.project_name or existing.get("project_name") or project_id).strip()
+    project_name = (
+        (payload.project_name or "").strip()
+        or str(existing.get("project_name") or "").strip()
+        or _central_project_name(project_id)
+        or project_id
+    )
     projects[project_id] = {"project_name": project_name, "folders": normalized}
     _save_bindings(data)
     return {"project_id": project_id, "project_name": project_name, "folders": normalized, "saved": True}
