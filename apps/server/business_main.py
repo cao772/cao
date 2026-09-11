@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import main as main_module
 from main import (
     app,
     latest_workspace_snapshots,
@@ -10,9 +11,33 @@ from main import (
 from model_config import router as model_config_router
 from node_status import router as node_status_router
 from people_identity import router as people_identity_router
+from people_store import resolve_contributors
 from platform_config import router as platform_router
 from project_brief import build_project_brief
 from project_settings import router as project_settings_router
+
+
+_raw_project_rollup = main_module.project_rollup
+
+
+def _people_aware_project_rollup(project_id: str) -> dict:
+    rollup = _raw_project_rollup(project_id)
+    contributors = resolve_contributors(list(rollup.get("contributors") or []))
+    resolved = dict(rollup)
+    resolved["contributors"] = contributors
+    resolved["contributor_count"] = len(contributors)
+    resolved["local_contributor_count"] = sum(
+        1 for item in contributors if "local" in (item.get("source_types") or [])
+    )
+    resolved["repository_contributor_count"] = sum(
+        1 for item in contributors if "repository" in (item.get("source_types") or [])
+    )
+    return resolved
+
+
+# Keep main.py routes backward compatible while letting their runtime global lookup use
+# the people projection in the production business app.
+main_module.project_rollup = _people_aware_project_rollup
 
 app.include_router(platform_router)
 app.include_router(project_settings_router)
