@@ -4,6 +4,19 @@ import agent_bridge
 import agent_session_bridge
 
 
+def _fake_build_agent_event(**kwargs):
+    return {
+        "event_type": kwargs["event_type"],
+        "project_id": kwargs["project_id"],
+        "user_id": agent_bridge.USER_ID,
+        "agent": {"name": agent_bridge.AGENT_NAME, "vendor": agent_bridge.AGENT_VENDOR},
+        "session_id": kwargs.get("session_id"),
+        "task_id": kwargs.get("task_id"),
+        "task_title": kwargs.get("task_title"),
+        "data": dict(kwargs.get("data") or {}),
+    }
+
+
 def test_explicit_session_is_preserved():
     agent_session_bridge.reset_fallback_sessions()
     assert agent_session_bridge.resolve_session_id("p1", "session-explicit") == "session-explicit"
@@ -36,6 +49,7 @@ def test_report_v2_adds_client_event_task_key_person_and_redacts_sensitive_data(
     agent_session_bridge.reset_fallback_sessions()
     monkeypatch.setattr(agent_bridge, "USER_ID", "cyh")
     monkeypatch.setattr(agent_bridge, "CENTRAL_URL", "")
+    monkeypatch.setattr(agent_bridge, "build_agent_event", _fake_build_agent_event)
     monkeypatch.setattr(agent_session_bridge, "_clock", lambda: datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc))
     result = agent_session_bridge.report_agent_event_v2(
         event_type="task.progress",
@@ -65,6 +79,7 @@ def test_report_v2_adds_client_event_task_key_person_and_redacts_sensitive_data(
 
 def test_report_v2_posts_same_structured_event_when_central_available(monkeypatch):
     monkeypatch.setattr(agent_bridge, "CENTRAL_URL", "http://central")
+    monkeypatch.setattr(agent_bridge, "build_agent_event", _fake_build_agent_event)
     captured = {}
 
     def fake_request(method, path, payload=None):
