@@ -6,12 +6,14 @@ import evidence_lifecycle_v2_impl as _impl
 
 
 # Integration adapter: explicit producer semantics win over legacy inference.
-# The normalized/public evidence keeps those producer values unchanged.  A separate
+# The normalized/public evidence keeps those producer values unchanged. A separate
 # adjudication view translates only known compatibility relations so the formal M3
 # judge can consume M2/M5 evidence without rewriting the evidence contract.
 _original_relation = _impl._relation
 _original_source_type = _impl._source_type
+_original_raw_identity = _impl._raw_identity
 _original_formal_status = _impl._formal_status
+_original_completion_level = _impl._completion_level
 _original_upgrade_fusion_result = _impl.upgrade_fusion_result
 
 _AGENT_RELATION_ALIASES = {
@@ -48,20 +50,19 @@ def _preferred_source_type(entry: dict[str, Any]) -> str:
     return _original_source_type(entry)
 
 
-def _adjudication_relation(entry: dict[str, Any]) -> str:
+def _canonical_relation(entry: dict[str, Any]) -> str:
+    """Return the M3 adjudication relation without mutating public evidence."""
     relation = str(entry.get("relation") or "")
     if relation in _AGENT_RELATION_ALIASES:
         return _AGENT_RELATION_ALIASES[relation]
     if relation not in _GENERIC_M2_RELATIONS:
         return relation
 
-    raw = entry.get("raw") if isinstance(entry.get("raw"), dict) else {}
+    raw = entry.get("raw") if isinstance(entry.get("raw"), dict) else entry
     inferred = _original_relation(raw)
     if inferred and inferred not in {"other", relation}:
         return inferred
 
-    # Compatibility fallbacks for M2 evidence that intentionally exposes a generic
-    # relation while keeping enough source/kind information for deterministic use.
     if relation == "implementation":
         return "local_change"
     if relation == "completion":
@@ -89,15 +90,37 @@ def _adjudication_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]
     adapted: list[dict[str, Any]] = []
     for entry in entries:
         item = dict(entry)
-        relation = _adjudication_relation(item)
+        relation = _canonical_relation(item)
         item["relation"] = relation
         item["source_type"] = _adjudication_source_type(item, relation)
         adapted.append(item)
     return adapted
 
 
+def _raw_identity_with_canonical_relation(entry: dict[str, Any], relation: str) -> str:
+    """Deduplicate on canonical state, not M2's generic relation bucket.
+
+    M2 intentionally exposes both ci.passed and ci.failed as relation=ci (and both
+    deployment outcomes as relation=deployment). They must remain distinct evidence
+    rows so M3 can select the latest outcome by observed_at.
+    """
+    canonical = _canonical_relation(entry)
+    adapted = dict(entry)
+    adapted["relation"] = canonical
+    adapted["source_type"] = _adjudication_source_type(adapted, canonical)
+    return _original_raw_identity(adapted, canonical)
+
+
 def _formal_status_with_compatibility_view(item, entries, capabilities):
     return _original_formal_status(item, _adjudication_entries(entries), capabilities)
+
+
+def _completion_level_with_compatibility_view(formal_status, entries, completion_claimed):
+    return _original_completion_level(
+        formal_status,
+        _adjudication_entries(entries),
+        completion_claimed,
+    )
 
 
 def upgrade_fusion_result(fusion, remote_events=None):
@@ -118,7 +141,9 @@ def upgrade_fusion_result(fusion, remote_events=None):
 
 _impl._relation = _preferred_relation
 _impl._source_type = _preferred_source_type
+_impl._raw_identity = _raw_identity_with_canonical_relation
 _impl._formal_status = _formal_status_with_compatibility_view
+_impl._completion_level = _completion_level_with_compatibility_view
 _impl.upgrade_fusion_result = upgrade_fusion_result
 
 FORMAL_STATUS_LABELS = _impl.FORMAL_STATUS_LABELS
