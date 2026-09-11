@@ -7,12 +7,14 @@ from main import (
     recent_agent_events,
     recent_remote_events,
 )
+from model_config import router as model_config_router
 from platform_config import router as platform_router
 from project_brief import build_project_brief
 from project_settings import router as project_settings_router
 
 app.include_router(platform_router)
 app.include_router(project_settings_router)
+app.include_router(model_config_router)
 
 
 @app.get("/api/v1/projects/{project_id}/brief")
