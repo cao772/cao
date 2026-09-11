@@ -41,6 +41,7 @@ def clean_display_title(value: Any) -> str:
         return ""
     task_id = extract_task_id(text)
     text = TASK_ID_RE.sub("", text).strip(" :-_/\t")
+    text = re.sub(r"^(?:本周|本月|本阶段|今日|今天|昨日|昨天|近期)[:：\s\-_/]*", "", text, flags=re.IGNORECASE)
     previous = None
     while text and text != previous:
         previous = text
@@ -55,10 +56,15 @@ def normalized_title(value: Any) -> str:
     text = clean_display_title(value).lower()
     # Small deterministic aliases cover common UI/task wording without turning
     # identity into unrestricted semantic guessing.
-    text = text.replace("上传更新页", "上传更新").replace("资料更新页", "资料更新")
-    text = re.sub(r"左侧树|树状结构|树状页面|树形菜单|树状|树形", "树", text)
+    text = text.replace("资料上传更新页面", "资料上传更新").replace("资料上传更新页", "资料上传更新")
+    text = text.replace("上传更新页", "上传更新").replace("资料更新页", "资料更新").replace("资料上传页", "资料上传")
+    text = re.sub(r"左侧树状|左侧树形|左侧树|树状结构|树状页面|树形菜单|树状|树形", "树", text)
+    text = re.sub(r"(?:页面|页)?改为", "", text)
+    text = re.sub(r"(?:选择材料|交互|结构开发|页面开发|开发)$", "", text)
+    text = re.sub(r"(?:测试)?\d+\s*/\s*\d+\s*(?:通过|pass(?:ed)?)$", "", text, flags=re.IGNORECASE)
     text = text.replace("资料更新", "资料上传更新").replace("上传更新", "资料上传更新")
     text = text.replace("资料资料上传更新", "资料上传更新")
+    text = text.replace("资料上传更新", "资料上传")
     text = re.sub(r"(?:菜单|页面|页)$", "", text)
     text = re.sub(r"(?:改造|调整|修复)$", "", text)
     text = SEPARATOR_RE.sub("", text)
