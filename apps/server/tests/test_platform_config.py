@@ -74,3 +74,43 @@ def test_repository_cannot_bind_to_two_business_projects(tmp_path, monkeypatch):
     conflict = client.put("/api/v1/platform/projects/p2/repositories", json={"repositories": [repo]})
     assert conflict.status_code == 409
     assert "p1" in conflict.json()["detail"]
+
+
+def test_managed_project_can_be_created_and_bound_before_first_snapshot(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    created = client.post(
+        "/api/v1/platform/projects",
+        json={
+            "project_id": "new-project",
+            "project_name": "新业务项目",
+            "description": "尚未完成本机采集",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["project"]["sampled"] is False
+
+    catalog = client.get("/api/v1/platform/projects").json()
+    item = next(project for project in catalog["projects"] if project["project_id"] == "new-project")
+    assert item["managed"] is True
+    assert item["project_name"] == "新业务项目"
+
+    repo = {
+        "repository_id": "202",
+        "name": "frontend",
+        "path_with_namespace": "group/frontend",
+        "web_url": "http://git.test/group/frontend",
+        "default_branch": "main",
+        "visibility": "private",
+    }
+    bound = client.put("/api/v1/platform/projects/new-project/repositories", json={"repositories": [repo]})
+    assert bound.status_code == 200
+    assert bound.json()["repositories"][0]["repository_id"] == "202"
+
+
+def test_invalid_managed_project_id_is_rejected(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    response = client.post(
+        "/api/v1/platform/projects",
+        json={"project_id": "../secret", "project_name": "错误项目"},
+    )
+    assert response.status_code == 422
