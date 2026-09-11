@@ -95,12 +95,42 @@
         <div>
           <div class="eyebrow">PLATFORM SETTINGS</div>
           <h2>平台配置</h2>
-          <p>管理代码平台、项目绑定和本机采集范围</p>
+          <p>管理业务项目、代码平台和本机采集范围</p>
         </div>
         <span id="settings-status" class="badge neutral">等待加载</span>
       </header>
 
       <section class="settings-stack">
+        <div class="panel settings-card">
+          <div class="settings-card-head">
+            <div>
+              <h3>业务项目</h3>
+              <p>先建立业务项目，再绑定一个或多个 GitLab 仓库和本机目录。</p>
+            </div>
+            <span id="business-project-count" class="badge neutral">0 个项目</span>
+          </div>
+          <div class="settings-form-grid">
+            <label class="field">
+              <span>项目标识</span>
+              <input id="business-project-id" type="text" placeholder="例如 low-voltage" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>项目名称</span>
+              <input id="business-project-name" type="text" placeholder="例如 低电压精准立项资料审核智能体" autocomplete="off" />
+            </label>
+            <label class="field field-wide">
+              <span>项目说明（可选）</span>
+              <input id="business-project-description" type="text" placeholder="用于区分项目范围，不影响采集" autocomplete="off" />
+            </label>
+          </div>
+          <div class="settings-actions">
+            <button id="business-project-create-btn" class="primary-button" type="button">创建业务项目</button>
+          </div>
+          <div id="business-project-message" class="inline-message"></div>
+          <div class="subsection-title project-catalog-title">已配置项目</div>
+          <div id="business-project-list" class="selection-list project-catalog-list"><div class="empty">正在读取业务项目</div></div>
+        </div>
+
         <div class="panel settings-card">
           <div class="settings-card-head">
             <div>
@@ -193,6 +223,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/app.js"></script>
   <script src="/settings.js"></script>
+  <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
 </body>
 </html>
