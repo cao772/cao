@@ -81,6 +81,7 @@ def test_rollup_keeps_multiple_developers_and_agents():
     assert users["caoyh"]["agents"] == ["Codex"]
     assert users["caoyh"]["dirty_workspace_count"] == 1
     assert users["yujie"]["agents"] == ["TRAE"]
+    assert {item["provider"] for item in users["caoyh"]["identity_refs"]} == {"local", "agent"}
 
 
 def test_rollup_attention_if_any_workspace_has_failure_or_blocker():
@@ -132,18 +133,20 @@ def test_remote_gitlab_authors_are_project_contributors():
     zhang = next(item for item in result["contributors"] if item["display_name"] == "zhangsan")
     assert zhang["source_types"] == ["repository"]
     assert zhang["repositories"] == ["multimodal-agent"]
+    assert zhang["identity_refs"] == [{"provider": "gitlab", "external_id": "zhangsan", "display_name": "zhangsan"}]
 
 
-def test_exact_remote_actor_name_merges_with_local_user():
+def test_exact_remote_actor_name_does_not_auto_merge_with_local_user():
     snapshots = [_snapshot(1, "caoyh", "mac-1", "缺陷", "cyh", False, 0)]
     remote_events = [
         {
             "event_type": "git.push",
+            "provider": "gitlab",
             "repository_id": "multimodal-agent",
             "observed_at": "2026-09-08T12:00:00+00:00",
             "data": {"author": "caoyh"},
         }
     ]
     result = build_project_rollup(snapshots, [], remote_events)
-    assert result["contributor_count"] == 1
-    assert result["contributors"][0]["source_types"] == ["local", "repository"]
+    assert result["contributor_count"] == 2
+    assert {tuple(item["source_types"]) for item in result["contributors"]} == {("local",), ("repository",)}
