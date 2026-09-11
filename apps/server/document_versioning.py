@@ -10,11 +10,12 @@ FULL_DATE = re.compile(r"(?<!\d)(20\d{2})\s*[._/\-年]?\s*(1[0-2]|0?[1-9])\s*[._
 MD_CHINESE = re.compile(r"(?<!\d)(1[0-2]|0?[1-9])\s*月\s*(3[01]|[12]\d|0?[1-9])\s*日?")
 MD_SEPARATED = re.compile(r"(?<!\d)(1[0-2]|0?[1-9])[._/\-](3[01]|[12]\d|0?[1-9])(?!\d)")
 MD_COMPACT = re.compile(r"(?<![A-Za-z0-9])(0?[1-9]|1[0-2])([0-3]\d)(?![A-Za-z0-9])")
-VERSION = re.compile(r"(?i)(?:^|[^a-z0-9])v\s*(\d+)(?:[._-](\d+))?")
+VERSION = re.compile(r"(?i)(?<![a-z0-9])v\s*(\d+)(?:[._-](\d+))?")
 ISSUE = re.compile(r"第\s*(\d+)\s*期")
 COPY_MARKERS = re.compile(r"(?:副本|copy|备份|backup|归档|archive|historical|history)", re.IGNORECASE)
-EDITION_MARKERS = re.compile(r"(?:最终版?|修订版?|新版|最新版|最新|正式版?|final|revised|revision|new)", re.IGNORECASE)
+EDITION_MARKERS = re.compile(r"(?:最终版?|修订版?|新版|最新版|最新|正式版?|final|revised|revision)", re.IGNORECASE)
 CURRENT_MARKERS = re.compile(r"(?:最终|final|最新|current|正式版)", re.IGNORECASE)
+NON_DATE_COMPACT_PREFIX = re.compile(r"(?:版本|编号|序号|型号|批次|工单|id|no\.?)\s*$", re.IGNORECASE)
 PARENT_SENSITIVE_STEMS = {"readme", "skill", "index", "config", "configuration", "requirements", "说明", "配置", "目录", "文档"}
 STABLE_ROLES = {"requirement", "design", "interface", "decision"}
 
@@ -28,6 +29,15 @@ def _valid_ymd(year: int, month: int, day: int) -> date | None:
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def _compact_is_date_context(text: str, match: re.Match[str]) -> bool:
+    prefix = text[max(0, match.start() - 8):match.start()]
+    return not bool(NON_DATE_COMPACT_PREFIX.search(prefix))
+
+
+def _compact_matches(text: str) -> list[re.Match[str]]:
+    return [match for match in MD_COMPACT.finditer(text) if _compact_is_date_context(text, match)]
 
 
 def _extract_date(text: str, *, reference_year: int, allow_compact: bool) -> tuple[date | None, str | None]:
@@ -45,7 +55,7 @@ def _extract_date(text: str, *, reference_year: int, allow_compact: bool) -> tup
             if _valid_ymd(reference_year, month, day):
                 candidates.append((match.start(), month, day))
     if allow_compact:
-        for match in MD_COMPACT.finditer(text):
+        for match in _compact_matches(text):
             month, day = map(int, match.groups())
             if _valid_ymd(reference_year, month, day):
                 candidates.append((match.start(), month, day))
@@ -73,11 +83,15 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
             date_text = parsed.isoformat()
     else:
         candidates: list[tuple[int, int, int]] = []
-        for pattern in (MD_CHINESE, MD_SEPARATED, MD_COMPACT):
+        for pattern in (MD_CHINESE, MD_SEPARATED):
             for match in pattern.finditer(name):
                 month, day = map(int, match.groups())
                 if _valid_ymd(2000, month, day):
                     candidates.append((match.start(), month, day))
+        for match in _compact_matches(name):
+            month, day = map(int, match.groups())
+            if _valid_ymd(2000, month, day):
+                candidates.append((match.start(), month, day))
         if candidates:
             _, month, day = sorted(candidates, key=lambda item: item[0])[-1]
             date_value = month * 100 + day
@@ -103,8 +117,9 @@ def infer_temporal_hints(path: str) -> dict[str, Any]:
 
 def _strip_temporal_noise(stem: str) -> str:
     value = stem.lower()
-    for pattern in (FULL_DATE, MD_CHINESE, MD_SEPARATED, MD_COMPACT):
+    for pattern in (FULL_DATE, MD_CHINESE, MD_SEPARATED):
         value = pattern.sub(" ", value)
+    value = MD_COMPACT.sub(lambda match: " " if _compact_is_date_context(value, match) else match.group(0), value)
     value = VERSION.sub(" ", value)
     value = ISSUE.sub(" ", value)
     value = COPY_MARKERS.sub(" ", value)
@@ -248,9 +263,26 @@ def freshness_sort_key(item: dict[str, Any], *, reference_year: int) -> tuple[in
     hints = infer_temporal_hints(path)
     issue = int(hints.get("issue") or 0)
     version = int(hints.get("version_major") or 0) * 1000 + int(hints.get("version_minor") or 0)
-    explicit = 1 if temporal.get("date_source") in {"body", "filename"} else 0
-    ordinal = parsed.toordinal() if parsed else 0
-    return explicit, ordinal, issue, version, source_quality(path, role), path
+    date_source = str(temporal.get("date_source") or "undated")
+    if date_source == "body":
+        source_rank = 5
+        primary = parsed.toordinal() if parsed else 0
+    elif date_source == "filename":
+        source_rank = 4
+        primary = parsed.toordinal() if parsed else 0
+    elif issue or version:
+        source_rank = 3
+        primary = issue * 1_000_000 + version
+    elif date_source == "metadata":
+        source_rank = 2
+        primary = parsed.toordinal() if parsed else 0
+    elif date_source == "mtime":
+        source_rank = 1
+        primary = parsed.toordinal() if parsed else 0
+    else:
+        source_rank = 0
+        primary = 0
+    return source_rank, primary, issue, version, source_quality(path, role), path
 
 
 def classify_latest_freshness(role: str, document_date: date | None, reference_date: date | None) -> str:
