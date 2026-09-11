@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import urllib.error
 import urllib.parse
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 DB_PATH = Path(os.getenv("DB_PATH", "/data/project.db"))
@@ -19,6 +20,7 @@ PLATFORM_KEY_PATH = Path(os.getenv("PLATFORM_KEY_PATH", "/data/platform.key"))
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 DEFAULT_GITLAB_URL = os.getenv("GITLAB_BASE_URL", "http://git.hyetec.com").rstrip("/")
 HTTP_TIMEOUT_SECONDS = int(os.getenv("PLATFORM_HTTP_TIMEOUT", "20"))
+PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 router = APIRouter(prefix="/api/v1")
 
@@ -30,6 +32,17 @@ class GitLabConfigIn(BaseModel):
 
 class GitLabDiscoverIn(BaseModel):
     search: str | None = Field(default=None, max_length=300)
+
+
+class BusinessProjectIn(BaseModel):
+    project_id: str = Field(min_length=1, max_length=80)
+    project_name: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class BusinessProjectUpdateIn(BaseModel):
+    project_name: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=2000)
 
 
 class RepositoryBindingIn(BaseModel):
@@ -68,6 +81,14 @@ def init_platform_db() -> None:
                 token_last4 TEXT,
                 verified_at TEXT,
                 account_json TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS managed_projects (
+                project_id TEXT PRIMARY KEY,
+                project_name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
 
@@ -131,6 +152,13 @@ def _normalize_base_url(value: str) -> str:
     if parsed.username or parsed.password:
         raise HTTPException(status_code=422, detail="GitLab 地址不能包含账号或密码")
     return text
+
+
+def _normalize_project_id(value: str) -> str:
+    project_id = value.strip()
+    if not PROJECT_ID_RE.fullmatch(project_id):
+        raise HTTPException(status_code=422, detail="项目标识仅支持字母、数字、点、下划线和短横线，且不能以符号开头")
+    return project_id
 
 
 def _connection_row() -> dict[str, Any] | None:
@@ -233,6 +261,94 @@ def _binding_rows(project_id: str | None = None) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _all_business_projects() -> list[dict[str, Any]]:
+    init_platform_db()
+    merged: dict[str, dict[str, Any]] = {}
+    with _db() as conn:
+        for row in conn.execute(
+            "SELECT project_id, project_name, description, created_at, updated_at FROM managed_projects ORDER BY updated_at DESC"
+        ).fetchall():
+            item = dict(row)
+            item.update({"managed": True, "sampled": False, "last_seen_at": None})
+            merged[str(item["project_id"])] = item
+        try:
+            sampled = conn.execute("SELECT project_id, project_name, last_seen_at FROM projects").fetchall()
+        except sqlite3.OperationalError:
+            sampled = []
+        for row in sampled:
+            project_id = str(row["project_id"])
+            item = merged.setdefault(
+                project_id,
+                {
+                    "project_id": project_id,
+                    "project_name": row["project_name"],
+                    "description": None,
+                    "created_at": None,
+                    "updated_at": None,
+                    "managed": False,
+                    "sampled": True,
+                    "last_seen_at": row["last_seen_at"],
+                },
+            )
+            item["project_name"] = item.get("project_name") or row["project_name"]
+            item["sampled"] = True
+            item["last_seen_at"] = row["last_seen_at"]
+    return sorted(merged.values(), key=lambda item: (str(item.get("project_name") or ""), str(item["project_id"])))
+
+
+def _project_exists(project_id: str) -> bool:
+    return any(str(item["project_id"]) == project_id for item in _all_business_projects())
+
+
+@router.get("/platform/projects")
+def list_managed_projects() -> dict[str, Any]:
+    projects = _all_business_projects()
+    return {"count": len(projects), "projects": projects}
+
+
+@router.post("/platform/projects")
+def create_managed_project(payload: BusinessProjectIn) -> dict[str, Any]:
+    project_id = _normalize_project_id(payload.project_id)
+    project_name = payload.project_name.strip()
+    if not project_name:
+        raise HTTPException(status_code=422, detail="请输入项目名称")
+    init_platform_db()
+    with _db() as conn:
+        existing = conn.execute("SELECT project_id FROM managed_projects WHERE project_id=?", (project_id,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="项目标识已存在")
+        try:
+            sampled = conn.execute("SELECT project_id FROM projects WHERE project_id=?", (project_id,)).fetchone()
+        except sqlite3.OperationalError:
+            sampled = None
+        if sampled:
+            raise HTTPException(status_code=409, detail="该项目已由本机采集创建，无需重复创建")
+        now = _now()
+        conn.execute(
+            "INSERT INTO managed_projects(project_id, project_name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (project_id, project_name, (payload.description or "").strip() or None, now, now),
+        )
+    return {"created": True, "project": next(item for item in _all_business_projects() if item["project_id"] == project_id)}
+
+
+@router.put("/platform/projects/{project_id}")
+def update_managed_project(project_id: str, payload: BusinessProjectUpdateIn) -> dict[str, Any]:
+    project_id = _normalize_project_id(project_id)
+    project_name = payload.project_name.strip()
+    if not project_name:
+        raise HTTPException(status_code=422, detail="请输入项目名称")
+    init_platform_db()
+    with _db() as conn:
+        row = conn.execute("SELECT project_id FROM managed_projects WHERE project_id=?", (project_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="该项目不是平台手工创建项目")
+        conn.execute(
+            "UPDATE managed_projects SET project_name=?, description=?, updated_at=? WHERE project_id=?",
+            (project_name, (payload.description or "").strip() or None, _now(), project_id),
+        )
+    return {"updated": True, "project": next(item for item in _all_business_projects() if item["project_id"] == project_id)}
+
+
 @router.get("/platform/gitlab")
 def get_gitlab_config() -> dict[str, Any]:
     row = _connection_row()
@@ -332,12 +448,10 @@ def get_project_bindings(project_id: str) -> dict[str, Any]:
 @router.put("/platform/projects/{project_id}/repositories")
 def put_project_bindings(project_id: str, payload: RepositoryBindingSet) -> dict[str, Any]:
     init_platform_db()
+    if not _project_exists(project_id):
+        raise HTTPException(status_code=404, detail="业务项目不存在，请先在平台配置创建项目或完成一次本地采集")
     requested_ids = {str(item.repository_id) for item in payload.repositories}
     with _db() as conn:
-        project = conn.execute("SELECT project_id FROM projects WHERE project_id=?", (project_id,)).fetchone()
-        if project is None:
-            raise HTTPException(status_code=404, detail="业务项目不存在，请先完成一次本地采集")
-
         for item in payload.repositories:
             conflict = conn.execute(
                 "SELECT project_id FROM project_repository_bindings WHERE provider='gitlab' AND repository_id=?",
@@ -411,12 +525,7 @@ def internal_gitlab_runtime_config(
     if not bindings:
         return {"configured": False, "version": 1, "projects": []}
 
-    with _db() as conn:
-        names = {
-            str(item["project_id"]): str(item["project_name"])
-            for item in conn.execute("SELECT project_id, project_name FROM projects").fetchall()
-        }
-
+    names = {str(item["project_id"]): str(item["project_name"]) for item in _all_business_projects()}
     grouped: dict[str, dict[str, Any]] = {}
     for item in bindings:
         project_id = str(item["project_id"])
