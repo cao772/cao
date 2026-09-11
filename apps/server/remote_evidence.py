@@ -5,6 +5,7 @@ from collections import Counter
 from typing import Any
 
 from evidence_fusion import similarity
+from task_intelligence import apply_task_intelligence
 
 
 REMOTE_STATUS_LABELS = {
@@ -293,10 +294,10 @@ def apply_remote_evidence(
                 "quiet": "暂无明显开发活动",
             }[project_state],
             "formal_completion_supported": True,
-            "formal_completion_reason": "任务只有在关联到CI通过、代码合并和部署成功远端证据后才判定正式完成。",
+            "formal_completion_reason": "任务只有在关联到CI通过、代码已合并和部署成功远端证据后才判定正式完成。",
             "summary": summary,
             "work_items": work_items,
             "unlinked_evidence": existing_unlinked,
         }
     )
-    return result
+    return apply_task_intelligence(result)
