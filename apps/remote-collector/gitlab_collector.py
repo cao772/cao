@@ -24,7 +24,7 @@ POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 INITIAL_LOOKBACK_HOURS = int(os.getenv("INITIAL_LOOKBACK_HOURS", "24"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("HTTP_TIMEOUT_SECONDS", "30"))
 MAX_PAGES = int(os.getenv("GITLAB_MAX_PAGES", "20"))
-COLLECTOR_VERSION = "0.2.0"
+COLLECTOR_VERSION = "0.3.0"
 TASK_ID_RE = re.compile(r"\b([A-Z][A-Z0-9_]{1,20}-\d+)\b")
 
 
@@ -45,7 +45,41 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _central_runtime_config() -> dict[str, Any] | None:
+    """Read decrypted runtime configuration from Central without exposing it to the browser."""
+    global GITLAB_BASE_URL, GITLAB_TOKEN
+    if not CENTRAL_URL or not COLLECTOR_TOKEN:
+        return None
+    request = urllib.request.Request(
+        f"{CENTRAL_URL}/api/v1/internal/gitlab/runtime-config",
+        headers={
+            "Accept": "application/json",
+            "X-Collector-Token": COLLECTOR_TOKEN,
+            "User-Agent": f"ai-dev-management-gitlab-collector/{COLLECTOR_VERSION}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+        print(json.dumps({"level": "warning", "stage": "runtime_config", "error": type(exc).__name__}, ensure_ascii=False))
+        return None
+    if not isinstance(data, dict) or not data.get("configured") or not data.get("projects"):
+        return None
+    base_url = str(data.get("gitlab_base_url") or "").strip().rstrip("/")
+    token = str(data.get("gitlab_token") or "").strip()
+    if not base_url or not token:
+        return None
+    GITLAB_BASE_URL = base_url
+    GITLAB_TOKEN = token
+    return {"version": 1, "projects": data.get("projects") or []}
+
+
 def load_config() -> dict[str, Any]:
+    runtime = _central_runtime_config()
+    if runtime is not None:
+        return runtime
     with CONFIG_PATH.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     if data.get("version") != 1:
@@ -95,7 +129,6 @@ def gitlab_get(path: str, params: dict[str, Any] | None = None) -> Any:
 
 
 def gitlab_get_all(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Fetch list endpoints across pages without depending on response headers."""
     base = dict(params or {})
     per_page = min(int(base.get("per_page") or 100), 100)
     base["per_page"] = per_page
@@ -164,24 +197,22 @@ def normalize_commit(project: dict[str, Any], repository: dict[str, Any], item: 
     sha = str(item.get("id") or item.get("short_id") or "").strip()
     observed = item.get("committed_date") or item.get("created_at") or utc_now()
     base = _base_event(project, repository)
-    base.update(
-        {
-            "client_event_id": _event_id(repository["id"], "commit", sha),
-            "event_type": "git.commit",
-            "observed_at": observed,
-            "branch": None,
-            "commit_sha": sha or None,
-            "remote_url": item.get("web_url"),
-            "task_id": _task_id(title, item.get("message")),
-            "task_title": title or None,
-            "data": {
-                "title": title,
-                "message": str(item.get("message") or "").strip()[:3000],
-                "author_name": item.get("author_name"),
-                "author_email": item.get("author_email"),
-            },
-        }
-    )
+    base.update({
+        "client_event_id": _event_id(repository["id"], "commit", sha),
+        "event_type": "git.commit",
+        "observed_at": observed,
+        "branch": None,
+        "commit_sha": sha or None,
+        "remote_url": item.get("web_url"),
+        "task_id": _task_id(title, item.get("message")),
+        "task_title": title or None,
+        "data": {
+            "title": title,
+            "message": str(item.get("message") or "").strip()[:3000],
+            "author_name": item.get("author_name"),
+            "author_email": item.get("author_email"),
+        },
+    })
     return base
 
 
@@ -194,27 +225,25 @@ def normalize_push_event(project: dict[str, Any], repository: dict[str, Any], it
     observed = item.get("created_at") or utc_now()
     author = item.get("author") or {}
     base = _base_event(project, repository)
-    base.update(
-        {
-            "client_event_id": _event_id(repository["id"], "push", source_id or f"{commit_to}:{ref}:{observed}"),
-            "event_type": "git.push",
-            "observed_at": observed,
-            "branch": ref or None,
-            "commit_sha": commit_to or None,
-            "remote_url": None,
-            "task_id": _task_id(title, ref),
-            "task_title": title or ref or None,
-            "data": {
-                "title": title,
-                "ref": ref,
-                "ref_type": push.get("ref_type"),
-                "commit_from": push.get("commit_from"),
-                "commit_to": push.get("commit_to"),
-                "commit_count": push.get("commit_count"),
-                "author": item.get("author_username") or (author.get("username") if isinstance(author, dict) else None),
-            },
-        }
-    )
+    base.update({
+        "client_event_id": _event_id(repository["id"], "push", source_id or f"{commit_to}:{ref}:{observed}"),
+        "event_type": "git.push",
+        "observed_at": observed,
+        "branch": ref or None,
+        "commit_sha": commit_to or None,
+        "remote_url": None,
+        "task_id": _task_id(title, ref),
+        "task_title": title or ref or None,
+        "data": {
+            "title": title,
+            "ref": ref,
+            "ref_type": push.get("ref_type"),
+            "commit_from": push.get("commit_from"),
+            "commit_to": push.get("commit_to"),
+            "commit_count": push.get("commit_count"),
+            "author": item.get("author_username") or (author.get("username") if isinstance(author, dict) else None),
+        },
+    })
     return base
 
 
@@ -228,26 +257,24 @@ def normalize_merge_request(project: dict[str, Any], repository: dict[str, Any],
     iid = str(item.get("iid") or item.get("id") or "")
     updated = str(item.get("updated_at") or item.get("created_at") or utc_now())
     base = _base_event(project, repository)
-    base.update(
-        {
-            "client_event_id": _event_id(repository["id"], "mr", f"{iid}:{state}:{updated}"),
-            "event_type": event_type,
-            "observed_at": merged_at or updated,
-            "branch": item.get("source_branch"),
-            "commit_sha": item.get("merge_commit_sha") or item.get("sha"),
-            "remote_url": item.get("web_url"),
-            "task_id": _task_id(title, item.get("description"), item.get("source_branch")),
-            "task_title": title or None,
-            "data": {
-                "title": title,
-                "iid": item.get("iid"),
-                "state": state,
-                "source_branch": item.get("source_branch"),
-                "target_branch": item.get("target_branch"),
-                "author": (item.get("author") or {}).get("username"),
-            },
-        }
-    )
+    base.update({
+        "client_event_id": _event_id(repository["id"], "mr", f"{iid}:{state}:{updated}"),
+        "event_type": event_type,
+        "observed_at": merged_at or updated,
+        "branch": item.get("source_branch"),
+        "commit_sha": item.get("merge_commit_sha") or item.get("sha"),
+        "remote_url": item.get("web_url"),
+        "task_id": _task_id(title, item.get("description"), item.get("source_branch")),
+        "task_title": title or None,
+        "data": {
+            "title": title,
+            "iid": item.get("iid"),
+            "state": state,
+            "source_branch": item.get("source_branch"),
+            "target_branch": item.get("target_branch"),
+            "author": (item.get("author") or {}).get("username"),
+        },
+    })
     return base
 
 
@@ -265,24 +292,22 @@ def normalize_pipeline(project: dict[str, Any], repository: dict[str, Any], item
     updated = str(item.get("updated_at") or item.get("created_at") or utc_now())
     ref = str(item.get("ref") or "").strip()
     base = _base_event(project, repository)
-    base.update(
-        {
-            "client_event_id": _event_id(repository["id"], "pipeline", f"{pipeline_id}:{status}:{updated}"),
-            "event_type": event_type,
-            "observed_at": updated,
-            "branch": ref or None,
-            "commit_sha": item.get("sha"),
-            "remote_url": item.get("web_url"),
-            "task_id": _task_id(ref),
-            "task_title": ref or None,
-            "data": {
-                "pipeline_id": item.get("id"),
-                "status": status,
-                "ref": ref,
-                "source": item.get("source"),
-            },
-        }
-    )
+    base.update({
+        "client_event_id": _event_id(repository["id"], "pipeline", f"{pipeline_id}:{status}:{updated}"),
+        "event_type": event_type,
+        "observed_at": updated,
+        "branch": ref or None,
+        "commit_sha": item.get("sha"),
+        "remote_url": item.get("web_url"),
+        "task_id": _task_id(ref),
+        "task_title": ref or None,
+        "data": {
+            "pipeline_id": item.get("id"),
+            "status": status,
+            "ref": ref,
+            "source": item.get("source"),
+        },
+    })
     return base
 
 
@@ -298,24 +323,22 @@ def normalize_deployment(project: dict[str, Any], repository: dict[str, Any], it
     ref = str(item.get("ref") or "").strip()
     deployable = item.get("deployable") or {}
     base = _base_event(project, repository)
-    base.update(
-        {
-            "client_event_id": _event_id(repository["id"], "deployment", f"{deployment_id}:{status}:{updated}"),
-            "event_type": event_type,
-            "observed_at": updated,
-            "branch": ref or None,
-            "commit_sha": deployable.get("commit", {}).get("id") if isinstance(deployable, dict) else None,
-            "remote_url": None,
-            "task_id": _task_id(ref),
-            "task_title": ref or None,
-            "data": {
-                "deployment_id": item.get("id"),
-                "status": status,
-                "ref": ref,
-                "environment": (item.get("environment") or {}).get("name"),
-            },
-        }
-    )
+    base.update({
+        "client_event_id": _event_id(repository["id"], "deployment", f"{deployment_id}:{status}:{updated}"),
+        "event_type": event_type,
+        "observed_at": updated,
+        "branch": ref or None,
+        "commit_sha": deployable.get("commit", {}).get("id") if isinstance(deployable, dict) else None,
+        "remote_url": None,
+        "task_id": _task_id(ref),
+        "task_title": ref or None,
+        "data": {
+            "deployment_id": item.get("id"),
+            "status": status,
+            "ref": ref,
+            "environment": (item.get("environment") or {}).get("name"),
+        },
+    })
     return base
 
 
@@ -332,12 +355,8 @@ def _encoded_project(repository: dict[str, Any]) -> str:
 
 
 def _collect_endpoint(
-    *,
-    project: dict[str, Any],
-    repository: dict[str, Any],
-    path: str,
-    params: dict[str, Any],
-    normalizer: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]],
+    *, project: dict[str, Any], repository: dict[str, Any], path: str,
+    params: dict[str, Any], normalizer: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]],
     newest: datetime,
 ) -> tuple[int, datetime]:
     emitted = 0
@@ -358,28 +377,18 @@ def _collect_endpoint(
     return emitted, newest
 
 
-def collect_repository(
-    project: dict[str, Any],
-    repository: dict[str, Any],
-    since: datetime,
-) -> tuple[int, datetime]:
+def collect_repository(project: dict[str, Any], repository: dict[str, Any], since: datetime) -> tuple[int, datetime]:
     encoded = _encoded_project(repository)
     since_iso = since.astimezone(timezone.utc).isoformat()
     emitted = 0
     newest = since
-
     endpoints = [
-        (
-            f"projects/{encoded}/events",
-            {"action": "pushed", "after": since.date().isoformat(), "per_page": 100},
-            normalize_push_event,
-        ),
+        (f"projects/{encoded}/events", {"action": "pushed", "after": since.date().isoformat(), "per_page": 100}, normalize_push_event),
         (f"projects/{encoded}/repository/commits", {"since": since_iso, "all": "true", "per_page": 100}, normalize_commit),
         (f"projects/{encoded}/merge_requests", {"scope": "all", "updated_after": since_iso, "per_page": 100}, normalize_merge_request),
         (f"projects/{encoded}/pipelines", {"updated_after": since_iso, "per_page": 100}, normalize_pipeline),
         (f"projects/{encoded}/deployments", {"updated_after": since_iso, "order_by": "updated_at", "per_page": 100}, normalize_deployment),
     ]
-
     for path, params, normalizer in endpoints:
         count, newest = _collect_endpoint(
             project=project,
@@ -399,7 +408,6 @@ def scan_once() -> dict[str, Any]:
     repo_state = state.setdefault("repositories", {})
     total = 0
     failures: list[dict[str, Any]] = []
-
     for project in config.get("projects") or []:
         if not isinstance(project, dict):
             continue
@@ -423,7 +431,6 @@ def scan_once() -> dict[str, Any]:
             except Exception as exc:
                 failures.append({"repository_id": repository_id, "error": str(exc)})
                 print(json.dumps({"level": "error", "repository": repository_id, "error": str(exc)}, ensure_ascii=False))
-
     state["last_scan_at"] = utc_now()
     save_state(state)
     return {"emitted": total, "failures": failures, "at": state["last_scan_at"]}
@@ -433,7 +440,6 @@ def main() -> None:
     print(json.dumps({
         "service": "gitlab-remote-collector",
         "version": COLLECTOR_VERSION,
-        "gitlab_base_url": GITLAB_BASE_URL,
         "central_enabled": bool(CENTRAL_URL),
         "poll_interval_seconds": POLL_INTERVAL_SECONDS,
         "config": str(CONFIG_PATH),
