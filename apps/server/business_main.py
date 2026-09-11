@@ -8,6 +8,7 @@ from main import (
     recent_agent_events,
     recent_remote_events,
 )
+from agent_api import router as agent_router
 from model_config import router as model_config_router
 from node_status import router as node_status_router
 from people_identity import router as people_identity_router
@@ -44,6 +45,7 @@ app.include_router(project_settings_router)
 app.include_router(model_config_router)
 app.include_router(node_status_router)
 app.include_router(people_identity_router)
+app.include_router(agent_router)
 
 
 @app.get("/api/v1/projects/{project_id}/brief")
