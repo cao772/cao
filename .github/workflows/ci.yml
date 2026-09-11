@@ -43,6 +43,7 @@ jobs:
           node --check apps/web/settings-local-scope.js
           node --check apps/web/settings-policy.js
           node --check apps/web/settings-model.js
+          node --check apps/web/settings-nodes.js
 
       - name: Validate configs
         env:
