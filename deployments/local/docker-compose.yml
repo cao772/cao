@@ -3,6 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: apps/local-sentinel/Dockerfile
+    command: ["python", "sentinel_runtime.py"]
     environment:
       PROJECTS_ROOT: /projects
       SENTINEL_STATE_ROOT: /state
@@ -40,9 +41,34 @@ services:
       MCP_PORT: ${MCP_PORT:-6410}
       AGENT_BRIDGE_HTTP_TIMEOUT: ${AGENT_BRIDGE_HTTP_TIMEOUT:-20}
     ports:
-      # Bind to loopback only: coding agents on this computer can access MCP,
-      # but the service is not exposed to the LAN by default.
       - "127.0.0.1:${MCP_PORT:-6410}:${MCP_PORT:-6410}"
+    volumes:
+      - ${PROJECTS_PATH:?set PROJECTS_PATH}:/projects:ro
+      - sentinel-state:/state
+    depends_on:
+      - sentinel
+    restart: unless-stopped
+
+  local-control:
+    build:
+      context: ../..
+      dockerfile: apps/local-sentinel/Dockerfile
+    command: ["uvicorn", "local_control:app", "--host", "0.0.0.0", "--port", "6411"]
+    environment:
+      PROJECTS_ROOT: /projects
+      SENTINEL_STATE_ROOT: /state
+      CENTRAL_URL: ${CENTRAL_URL}
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN}
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-900}
+      USER_ID: ${USER_ID:-developer}
+      DEVICE_ID: ${DEVICE_ID:-local-device}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      LOCAL_LLM_TIMEOUT: ${LOCAL_LLM_TIMEOUT:-60}
+      ALLOW_REMOTE_ANALYSIS_ENDPOINT: ${ALLOW_REMOTE_ANALYSIS_ENDPOINT:-false}
+    ports:
+      - "127.0.0.1:${LOCAL_CONTROL_PORT:-6411}:6411"
     volumes:
       - ${PROJECTS_PATH:?set PROJECTS_PATH}:/projects:ro
       - sentinel-state:/state
