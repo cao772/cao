@@ -288,3 +288,19 @@ def test_30_memory_current_task_can_seed_when_fusion_has_none():
     result = apply_task_intelligence(_fusion([]), memories=[memory])
     assert len(result["work_items"]) == 1
     assert result["work_items"][0]["status"] == "planned"
+
+
+def test_31_acceptance_tree_task_collapses_lifecycle_records():
+    result = apply_task_intelligence(_fusion([
+        _item("资料上传更新页面改为左侧树状选择材料", status="planned", kind="requirement", origin_type="requirement"),
+        _item("本周完成资料上传树状结构开发", status="planned", kind="task", origin_type="task"),
+        _item("完成资料上传页树状结构", status="agent_claim_only", kind="finished", origin_type="task", source="agent"),
+        _item("资料上传更新树状页面 3/3通过", status="implementation_tested", kind="test", origin_type="test"),
+    ]))
+    assert len(result["work_items"]) == 1
+    item = result["work_items"][0]
+    assert item["completion_claimed"] is True
+    assert item["formal_completion"] is False
+    relations = {entry["relation"] for entry in item["evidence"]}
+    assert {"requirement", "agent_finished", "test"} <= relations
+    assert item["task_status"] == "implementation_done"
