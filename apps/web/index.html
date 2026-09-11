@@ -125,10 +125,48 @@
           </div>
           <div class="settings-actions">
             <button id="business-project-create-btn" class="primary-button" type="button">创建业务项目</button>
+            <button id="business-project-cancel-btn" class="secondary-button hidden" type="button">取消编辑</button>
           </div>
           <div id="business-project-message" class="inline-message"></div>
           <div class="subsection-title project-catalog-title">已配置项目</div>
           <div id="business-project-list" class="selection-list project-catalog-list"><div class="empty">正在读取业务项目</div></div>
+        </div>
+
+        <div class="panel settings-card">
+          <div class="settings-card-head">
+            <div>
+              <h3>采集策略</h3>
+              <p>按项目控制是否采集，以及是否只看元数据或在本机读取项目资料并调用模型分析。</p>
+            </div>
+            <span class="badge neutral">项目级</span>
+          </div>
+          <div class="policy-grid">
+            <label class="field">
+              <span>业务项目</span>
+              <select id="policy-project-select"></select>
+            </label>
+            <label class="field">
+              <span>内容分析方式</span>
+              <select id="policy-security-mode">
+                <option value="metadata_only">仅元数据与 Git</option>
+                <option value="local_analysis">本机读取资料内容</option>
+              </select>
+            </label>
+            <label class="policy-toggle"><input id="policy-enabled" type="checkbox" checked /><span>启用该项目采集</span></label>
+            <label class="policy-toggle"><input id="policy-analysis-enabled" type="checkbox" /><span>解析项目资料正文</span></label>
+            <label class="policy-toggle"><input id="policy-use-llm" type="checkbox" /><span>使用已配置的大模型分析</span></label>
+          </div>
+          <div class="policy-include-wrap">
+            <span>参与正文分析的目录类型</span>
+            <label><input id="policy-include-documents" type="checkbox" checked /> 项目资料</label>
+            <label><input id="policy-include-tests" type="checkbox" checked /> 测试</label>
+            <label><input id="policy-include-outputs" type="checkbox" checked /> 输出</label>
+            <small>代码目录始终只做 Git/结构变化分析，不会因这里的设置直接上传源码正文。</small>
+          </div>
+          <div class="settings-actions right-actions">
+            <button id="policy-save-btn" class="primary-button" type="button">保存采集策略</button>
+          </div>
+          <div id="policy-message" class="inline-message"></div>
         </div>
 
         <div class="panel settings-card">
@@ -225,5 +263,6 @@
   <script src="/settings.js"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
+  <script src="/settings-policy.js"></script>
 </body>
 </html>
