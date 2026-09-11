@@ -56,24 +56,31 @@ def _new_contributor(user_id: str, display_name: str | None = None) -> dict[str,
         "agent_event_count": 0,
         "remote_event_count": 0,
         "source_types": set(),
+        "identity_refs": {},
     }
 
 
-def _remote_actor(event: dict[str, Any]) -> tuple[str | None, str | None]:
+def _remote_actor(event: dict[str, Any]) -> tuple[str, str | None, str | None]:
     data = event.get("data") or {}
-    event_type = str(event.get("event_type") or "")
-    candidates: list[Any] = []
-    if event_type == "git.commit":
-        candidates.extend([data.get("author_name"), data.get("author_email")])
-    else:
-        candidates.extend([data.get("author"), data.get("author_name"), data.get("author_username")])
-    for candidate in candidates:
-        if isinstance(candidate, dict):
-            candidate = candidate.get("username") or candidate.get("name")
-        text = re.sub(r"\s+", " ", str(candidate or "")).strip()
-        if text:
-            return _actor_key(text), text
-    return None, None
+    provider = str(event.get("provider") or "gitlab").strip().lower() or "gitlab"
+    author = data.get("author")
+    username = data.get("author_username")
+    display_name = data.get("author_name")
+
+    if isinstance(author, dict):
+        username = username or author.get("username") or author.get("login")
+        display_name = display_name or author.get("name") or username
+    elif isinstance(author, str):
+        username = username or author
+        display_name = display_name or author
+
+    if event.get("event_type") == "git.commit":
+        username = username or data.get("author_name")
+        display_name = display_name or data.get("author_name")
+
+    external_id = re.sub(r"\s+", " ", str(username or display_name or "")).strip() or None
+    display = re.sub(r"\s+", " ", str(display_name or external_id or "")).strip() or None
+    return provider, external_id, display
 
 
 def build_workspace_view(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -133,26 +140,47 @@ def build_project_rollup(
     agent_events: list[dict[str, Any]] | None = None,
     remote_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate every known participant without pretending Git-only users have a local agent."""
+    """Aggregate contributors while keeping cross-provider identities separate until resolved."""
     agent_events = agent_events or []
     remote_events = remote_events or []
     workspaces = [build_workspace_view(snapshot) for snapshot in workspace_snapshots]
 
     contributor_map: dict[str, dict[str, Any]] = {}
 
-    def contributor_for(raw_id: Any, display_name: str | None = None) -> dict[str, Any]:
+    def contributor_for(
+        namespace: str,
+        raw_id: Any,
+        display_name: str | None = None,
+        *,
+        identity_provider: str | None = None,
+        identity_external_id: str | None = None,
+    ) -> dict[str, Any]:
         raw_text = re.sub(r"\s+", " ", str(raw_id or "unknown")).strip() or "unknown"
-        key = _actor_key(raw_text) or "unknown"
+        key = f"{namespace}:{_actor_key(raw_text) or 'unknown'}"
         item = contributor_map.get(key)
         if item is None:
             item = _new_contributor(raw_text, display_name)
             contributor_map[key] = item
         elif display_name and (not item.get("display_name") or item.get("display_name") == item.get("user_id")):
             item["display_name"] = display_name
+        provider = str(identity_provider or "").strip().lower()
+        external_id = re.sub(r"\s+", " ", str(identity_external_id or raw_text)).strip()
+        if provider and external_id:
+            item["identity_refs"][(provider, external_id.lower())] = {
+                "provider": provider,
+                "external_id": external_id,
+                "display_name": display_name or raw_text,
+            }
         return item
 
     for workspace in workspaces:
-        contributor = contributor_for(workspace.get("user_id"))
+        user_id = workspace.get("user_id")
+        contributor = contributor_for(
+            "principal",
+            user_id,
+            identity_provider="local",
+            identity_external_id=str(user_id or ""),
+        )
         contributor["source_types"].add("local")
         contributor["workspaces"].append(workspace.get("workspace_name"))
         if workspace.get("device_id"):
@@ -170,7 +198,13 @@ def build_project_rollup(
             contributor["attention_workspace_count"] += 1
 
     for event in agent_events:
-        contributor = contributor_for(event.get("user_id"))
+        user_id = event.get("user_id")
+        contributor = contributor_for(
+            "principal",
+            user_id,
+            identity_provider="agent",
+            identity_external_id=str(user_id or ""),
+        )
         contributor["source_types"].add("agent")
         agent = event.get("agent") or {}
         name = str(agent.get("name") or agent.get("vendor") or "").strip()
@@ -182,10 +216,16 @@ def build_project_rollup(
         )
 
     for event in remote_events:
-        key, display_name = _remote_actor(event)
-        if not key or not display_name:
+        provider, external_id, display_name = _remote_actor(event)
+        if not external_id:
             continue
-        contributor = contributor_for(key, display_name)
+        contributor = contributor_for(
+            f"remote:{provider}",
+            external_id,
+            display_name,
+            identity_provider=provider,
+            identity_external_id=external_id,
+        )
         contributor["source_types"].add("repository")
         contributor["remote_event_count"] += 1
         repository_id = str(event.get("repository_id") or "").strip()
@@ -217,6 +257,10 @@ def build_project_rollup(
                 "agent_event_count": contributor["agent_event_count"],
                 "remote_event_count": contributor["remote_event_count"],
                 "source_types": sorted(contributor["source_types"]),
+                "identity_refs": sorted(
+                    contributor["identity_refs"].values(),
+                    key=lambda item: (str(item.get("provider") or ""), str(item.get("external_id") or "")),
+                ),
             }
         )
     contributors.sort(key=lambda item: item.get("latest_activity_at") or "", reverse=True)
