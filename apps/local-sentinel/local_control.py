@@ -20,8 +20,9 @@ USER_ID = os.getenv("USER_ID", "developer")
 DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 HIDDEN_NAMES = {".git", "node_modules", ".venv", "__pycache__", ".DS_Store"}
 VALID_ROLES = {"code", "documents", "tests", "outputs"}
+VALID_ANALYSIS_INCLUDE = {"documents", "tests", "outputs"}
 
-app = FastAPI(title="Project Sentinel Local Control", version="0.3.1")
+app = FastAPI(title="Project Sentinel Local Control", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8088", "http://localhost:8088"],
@@ -36,9 +37,47 @@ class FolderBinding(BaseModel):
     role: str = Field(pattern="^(code|documents|tests|outputs)$")
 
 
+class LocalCollectionPolicy(BaseModel):
+    enabled: bool = True
+    security_mode: str = Field(default="metadata_only", pattern="^(metadata_only|local_analysis)$")
+    analysis_enabled: bool = False
+    use_llm: bool = False
+    include: list[str] = Field(default_factory=lambda: ["documents", "tests", "outputs"], max_length=3)
+
+
 class FolderBindingSet(BaseModel):
     project_name: str | None = Field(default=None, max_length=500)
     folders: list[FolderBinding] = Field(default_factory=list, max_length=200)
+    policy: LocalCollectionPolicy | None = None
+
+
+def _default_policy() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "security_mode": "metadata_only",
+        "analysis_enabled": False,
+        "use_llm": False,
+        "include": ["documents", "tests", "outputs"],
+    }
+
+
+def _normalize_policy(policy: LocalCollectionPolicy | dict[str, Any] | None) -> dict[str, Any]:
+    if policy is None:
+        return _default_policy()
+    raw = policy.model_dump() if isinstance(policy, LocalCollectionPolicy) else dict(policy)
+    mode = str(raw.get("security_mode") or "metadata_only")
+    if mode not in {"metadata_only", "local_analysis"}:
+        mode = "metadata_only"
+    include = [str(item) for item in (raw.get("include") or []) if str(item) in VALID_ANALYSIS_INCLUDE]
+    include = list(dict.fromkeys(include)) or ["documents", "tests", "outputs"]
+    analysis_enabled = bool(raw.get("analysis_enabled") and mode == "local_analysis")
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "security_mode": mode,
+        "analysis_enabled": analysis_enabled,
+        "use_llm": bool(raw.get("use_llm") and analysis_enabled),
+        "include": include,
+    }
 
 
 def _load_bindings() -> dict[str, Any]:
@@ -102,7 +141,7 @@ def _central_project_name(project_id: str) -> str | None:
         return None
     request = urllib.request.Request(
         f"{CENTRAL_URL}/api/v1/platform/projects",
-        headers={"Accept": "application/json", "User-Agent": "project-sentinel-local-control/0.3"},
+        headers={"Accept": "application/json", "User-Agent": "project-sentinel-local-control/0.4"},
         method="GET",
     )
     try:
@@ -256,9 +295,16 @@ def put_bindings(project_id: str, payload: FolderBindingSet) -> dict[str, Any]:
         or _central_project_name(project_id)
         or project_id
     )
-    projects[project_id] = {"project_name": project_name, "folders": normalized}
+    policy = _normalize_policy(payload.policy if payload.policy is not None else existing.get("policy"))
+    projects[project_id] = {"project_name": project_name, "folders": normalized, "policy": policy}
     _save_bindings(data)
-    return {"project_id": project_id, "project_name": project_name, "folders": normalized, "saved": True}
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "folders": normalized,
+        "policy": policy,
+        "saved": True,
+    }
 
 
 @app.post("/api/v1/local/projects/{project_id}/scan")
