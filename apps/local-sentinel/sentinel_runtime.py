@@ -16,6 +16,7 @@ ROLE_TO_PATH_KEY = {
     "tests": "tests",
     "outputs": "outputs",
 }
+VALID_ANALYSIS_INCLUDE = {"documents", "tests", "outputs"}
 
 
 def load_bindings() -> dict[str, Any]:
@@ -58,12 +59,53 @@ def _runtime_repositories(project_root: Path, code_paths: list[str]) -> list[dic
     return repositories
 
 
+def _runtime_policy(project_cfg: dict[str, Any]) -> dict[str, Any] | None:
+    raw = project_cfg.get("policy")
+    if not isinstance(raw, dict):
+        return None
+    mode = str(raw.get("security_mode") or "metadata_only")
+    if mode not in {"metadata_only", "local_analysis"}:
+        mode = "metadata_only"
+    include = [str(item) for item in (raw.get("include") or []) if str(item) in VALID_ANALYSIS_INCLUDE]
+    include = list(dict.fromkeys(include)) or ["documents", "tests", "outputs"]
+    analysis_enabled = bool(raw.get("analysis_enabled") and mode == "local_analysis")
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "security_mode": mode,
+        "analysis_enabled": analysis_enabled,
+        "use_llm": bool(raw.get("use_llm") and analysis_enabled),
+        "include": include,
+    }
+
+
+def _apply_policy(effective: dict[str, Any], policy: dict[str, Any] | None) -> None:
+    if not policy:
+        return
+    security = effective.setdefault("security", {})
+    security["mode"] = policy["security_mode"]
+    security["scan_env_files"] = False
+    security["upload_source_code"] = False
+    security["upload_documents"] = False
+
+    analysis = effective.setdefault("analysis", {})
+    analysis["enabled"] = bool(policy["analysis_enabled"])
+    analysis["use_llm"] = bool(policy["use_llm"])
+    analysis["include"] = list(policy["include"])
+
+
 def apply_runtime_bindings(project_root: Path, manifest: dict[str, Any], bindings: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     project_id = str((manifest.get("project") or {}).get("id") or "")
     project_cfg = (bindings.get("projects") or {}).get(project_id) or {}
     folders = project_cfg.get("folders") or []
-    if not folders:
-        return manifest, {"applied": False, "selected": 0, "ignored_outside_project": [], "runtime_repositories": 0}
+    policy = _runtime_policy(project_cfg)
+    if not folders and not policy:
+        return manifest, {
+            "applied": False,
+            "selected": 0,
+            "ignored_outside_project": [],
+            "runtime_repositories": 0,
+            "policy": None,
+        }
 
     root = project_root.resolve()
     selected: dict[str, list[str]] = {value: [] for value in ROLE_TO_PATH_KEY.values()}
@@ -92,25 +134,20 @@ def apply_runtime_bindings(project_root: Path, manifest: dict[str, Any], binding
             paths[key] = list(dict.fromkeys(values))
             applied_count += len(values)
 
-    # Selected document/test/output folders become the analysis scope. Code selection
-    # affects repository inspection, but does not automatically enable source-body LLM analysis.
-    analysis = effective.setdefault("analysis", {})
-    include = set(analysis.get("include") or ["documents", "tests", "outputs"])
-    for key in ("documents", "tests", "outputs"):
-        if selected.get(key):
-            include.add(key)
-    analysis["include"] = [key for key in ("documents", "tests", "outputs", "code") if key in include]
-
+    # Folder selection controls scope. Analysis policy is applied separately and never
+    # enables source-code body upload or code-body LLM analysis.
     runtime_repositories = _runtime_repositories(project_root, selected["code"])
     if runtime_repositories:
         effective["repositories"] = runtime_repositories
         effective.pop("repository", None)
+    _apply_policy(effective, policy)
 
     return effective, {
-        "applied": bool(applied_count),
+        "applied": bool(applied_count or policy),
         "selected": applied_count,
         "ignored_outside_project": outside,
         "runtime_repositories": len(runtime_repositories),
+        "policy": policy,
     }
 
 
@@ -126,7 +163,7 @@ def build_managed_manifest(project_id: str, project_cfg: dict[str, Any]) -> dict
             selected[key].append(raw)
 
     repositories = _runtime_repositories(sentinel.PROJECTS_ROOT, list(dict.fromkeys(selected["code"])))
-    return {
+    manifest = {
         "version": 1,
         "project": {
             "id": project_id,
@@ -142,8 +179,6 @@ def build_managed_manifest(project_id: str, project_cfg: dict[str, Any]) -> dict
             "**/.DS_Store",
             "**/.env",
         ],
-        # A newly configured project starts metadata-only. Adding a project.yaml later
-        # can explicitly opt into document-body / LLM analysis without weakening safety.
         "security": {
             "mode": "metadata_only",
             "scan_env_files": False,
@@ -156,12 +191,14 @@ def build_managed_manifest(project_id: str, project_cfg: dict[str, Any]) -> dict
             "use_llm": False,
         },
     }
+    _apply_policy(manifest, _runtime_policy(project_cfg))
+    return manifest
 
 
 def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
     bindings = load_bindings()
     binding_projects = bindings.get("projects") or {}
-    matched = uploaded = 0
+    matched = uploaded = skipped_disabled = 0
     projects = sentinel.discover_projects()
     discovered_ids: set[str] = set()
 
@@ -171,6 +208,11 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
             continue
         discovered_ids.add(project_id)
         if only_project_id and project_id != only_project_id:
+            continue
+        project_cfg = binding_projects.get(project_id) or {}
+        policy = _runtime_policy(project_cfg) if isinstance(project_cfg, dict) else None
+        if policy and not policy["enabled"]:
+            skipped_disabled += 1
             continue
         matched += 1
         effective, overlay = apply_runtime_bindings(project_root, manifest, bindings)
@@ -189,6 +231,10 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
             continue
         if not isinstance(project_cfg, dict) or not project_cfg.get("folders"):
             continue
+        policy = _runtime_policy(project_cfg)
+        if policy and not policy["enabled"]:
+            skipped_disabled += 1
+            continue
         matched += 1
         manifest = build_managed_manifest(project_id, project_cfg)
         snapshot = sentinel.build_snapshot(sentinel.PROJECTS_ROOT, manifest)
@@ -199,11 +245,17 @@ def scan_once(only_project_id: str | None = None) -> dict[str, Any]:
             "ignored_outside_project": [],
             "runtime_repositories": len(manifest.get("repositories") or []),
             "managed_without_manifest": True,
+            "policy": policy,
         }
         if sentinel.upload_snapshot(snapshot):
             uploaded += 1
 
-    return {"matched": matched, "uploaded": uploaded, "at": sentinel.utc_now()}
+    return {
+        "matched": matched,
+        "uploaded": uploaded,
+        "skipped_disabled": skipped_disabled,
+        "at": sentinel.utc_now(),
+    }
 
 
 def main() -> None:
