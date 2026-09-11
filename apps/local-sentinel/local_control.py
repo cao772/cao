@@ -18,7 +18,7 @@ DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 HIDDEN_NAMES = {".git", "node_modules", ".venv", "__pycache__", ".DS_Store"}
 VALID_ROLES = {"code", "documents", "tests", "outputs"}
 
-app = FastAPI(title="Project Sentinel Local Control", version="0.2.0")
+app = FastAPI(title="Project Sentinel Local Control", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8088", "http://localhost:8088"],
@@ -34,6 +34,7 @@ class FolderBinding(BaseModel):
 
 
 class FolderBindingSet(BaseModel):
+    project_name: str | None = Field(default=None, max_length=500)
     folders: list[FolderBinding] = Field(default_factory=list, max_length=200)
 
 
@@ -86,12 +87,11 @@ def _discover_local_projects() -> list[dict[str, str]]:
     return result
 
 
-def _project_root(project_id: str) -> Path:
-    root = PROJECTS_ROOT.resolve()
+def _find_project_root(project_id: str) -> Path | None:
     for item in _discover_local_projects():
         if item["project_id"] == project_id:
             return (PROJECTS_ROOT / item["root"]).resolve()
-    raise HTTPException(status_code=404, detail="本机未发现该 project_id 的 project.yaml")
+    return None
 
 
 def resolve_authorized_folder(raw: str) -> Path:
@@ -137,6 +137,19 @@ def _folder_node(path: Path, depth: int, max_children: int) -> dict[str, Any]:
     return node
 
 
+def _top_level_folders(depth: int, max_children: int) -> list[dict[str, Any]]:
+    folders: list[dict[str, Any]] = []
+    for child in sorted(PROJECTS_ROOT.iterdir(), key=lambda item: item.name.lower()):
+        if not child.is_dir() or child.name in HIDDEN_NAMES or child.name.startswith("."):
+            continue
+        try:
+            child.resolve().relative_to(PROJECTS_ROOT.resolve())
+        except (OSError, ValueError):
+            continue
+        folders.append(_folder_node(child, depth - 1, max_children))
+    return folders
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "service": "local-control", "projects_root": "/projects"}
@@ -161,21 +174,29 @@ def local_folders(
     project_id: str | None = Query(default=None, max_length=200),
 ) -> dict[str, Any]:
     if not PROJECTS_ROOT.exists():
-        return {"root": "/projects", "folders": [], "available": False}
-    folders: list[dict[str, Any]] = []
+        return {"root": "/projects", "folders": [], "available": False, "scope": "none"}
     if project_id:
-        project_root = _project_root(project_id)
-        folders = [_folder_node(project_root, depth, max_children)]
-    else:
-        for child in sorted(PROJECTS_ROOT.iterdir(), key=lambda item: item.name.lower()):
-            if not child.is_dir() or child.name in HIDDEN_NAMES or child.name.startswith("."):
-                continue
-            try:
-                child.resolve().relative_to(PROJECTS_ROOT.resolve())
-            except (OSError, ValueError):
-                continue
-            folders.append(_folder_node(child, depth - 1, max_children))
-    return {"root": "/projects", "folders": folders, "available": True}
+        project_root = _find_project_root(project_id)
+        if project_root is not None:
+            return {
+                "root": "/projects",
+                "folders": [_folder_node(project_root, depth, max_children)],
+                "available": True,
+                "scope": "project",
+            }
+        # 平台手工创建项目还没有 project.yaml 时，仍允许从 Docker 已授权的 /projects 范围选择目录。
+        return {
+            "root": "/projects",
+            "folders": _top_level_folders(depth, max_children),
+            "available": True,
+            "scope": "authorized-root",
+        }
+    return {
+        "root": "/projects",
+        "folders": _top_level_folders(depth, max_children),
+        "available": True,
+        "scope": "authorized-root",
+    }
 
 
 @app.get("/api/v1/local/bindings")
@@ -185,17 +206,18 @@ def get_bindings() -> dict[str, Any]:
 
 @app.put("/api/v1/local/projects/{project_id}/bindings")
 def put_bindings(project_id: str, payload: FolderBindingSet) -> dict[str, Any]:
-    project_root = _project_root(project_id)
+    project_root = _find_project_root(project_id)
     normalized: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for item in payload.folders:
         if item.role not in VALID_ROLES:
             raise HTTPException(status_code=422, detail=f"不支持的目录用途：{item.role}")
         resolved = resolve_authorized_folder(item.path)
-        try:
-            resolved.relative_to(project_root)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="所选目录不属于当前业务项目的本机项目根目录") from exc
+        if project_root is not None:
+            try:
+                resolved.relative_to(project_root)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="所选目录不属于当前业务项目的本机项目根目录") from exc
         relative = resolved.relative_to(PROJECTS_ROOT.resolve()).as_posix()
         identity = (relative, item.role)
         if identity in seen:
@@ -205,9 +227,11 @@ def put_bindings(project_id: str, payload: FolderBindingSet) -> dict[str, Any]:
 
     data = _load_bindings()
     projects = data.setdefault("projects", {})
-    projects[project_id] = {"folders": normalized}
+    existing = projects.get(project_id) or {}
+    project_name = (payload.project_name or existing.get("project_name") or project_id).strip()
+    projects[project_id] = {"project_name": project_name, "folders": normalized}
     _save_bindings(data)
-    return {"project_id": project_id, "folders": normalized, "saved": True}
+    return {"project_id": project_id, "project_name": project_name, "folders": normalized, "saved": True}
 
 
 @app.post("/api/v1/local/projects/{project_id}/scan")
@@ -216,5 +240,5 @@ def scan_project(project_id: str) -> dict[str, Any]:
 
     result = scan_once(only_project_id=project_id)
     if result.get("matched", 0) == 0:
-        raise HTTPException(status_code=404, detail="本机未发现该 project_id 的 project.yaml")
+        raise HTTPException(status_code=404, detail="本机未发现该项目配置或 project.yaml")
     return result
