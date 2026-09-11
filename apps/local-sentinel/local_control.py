@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,13 +18,10 @@ DEVICE_ID = os.getenv("DEVICE_ID", "local-device")
 HIDDEN_NAMES = {".git", "node_modules", ".venv", "__pycache__", ".DS_Store"}
 VALID_ROLES = {"code", "documents", "tests", "outputs"}
 
-app = FastAPI(title="Project Sentinel Local Control", version="0.1.0")
+app = FastAPI(title="Project Sentinel Local Control", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:8088",
-        "http://localhost:8088",
-    ],
+    allow_origins=["http://127.0.0.1:8088", "http://localhost:8088"],
     allow_credentials=False,
     allow_methods=["GET", "PUT", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
@@ -60,6 +58,42 @@ def _save_bindings(data: dict[str, Any]) -> None:
     tmp.replace(BINDINGS_PATH)
 
 
+def _discover_local_projects() -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    if not PROJECTS_ROOT.exists():
+        return result
+    root = PROJECTS_ROOT.resolve()
+    for child in sorted(PROJECTS_ROOT.iterdir(), key=lambda item: item.name.lower()):
+        manifest_path = child / "project.yaml"
+        if not child.is_dir() or not manifest_path.is_file():
+            continue
+        try:
+            resolved = child.resolve()
+            resolved.relative_to(root)
+            data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            project = data.get("project") or {}
+            project_id = str(project.get("id") or "").strip()
+            if project_id:
+                result.append(
+                    {
+                        "project_id": project_id,
+                        "project_name": str(project.get("name") or project_id),
+                        "root": resolved.relative_to(root).as_posix(),
+                    }
+                )
+        except (OSError, ValueError, yaml.YAMLError):
+            continue
+    return result
+
+
+def _project_root(project_id: str) -> Path:
+    root = PROJECTS_ROOT.resolve()
+    for item in _discover_local_projects():
+        if item["project_id"] == project_id:
+            return (PROJECTS_ROOT / item["root"]).resolve()
+    raise HTTPException(status_code=404, detail="本机未发现该 project_id 的 project.yaml")
+
+
 def resolve_authorized_folder(raw: str) -> Path:
     text = raw.strip().replace("\\", "/").strip("/")
     if not text or text == "." or "\x00" in text:
@@ -74,7 +108,6 @@ def resolve_authorized_folder(raw: str) -> Path:
         raise HTTPException(status_code=422, detail="目录超出已授权的 /projects 范围") from exc
     if not candidate.exists() or not candidate.is_dir():
         raise HTTPException(status_code=404, detail=f"目录不存在：{text}")
-    # resolve() above also prevents a symlink from escaping PROJECTS_ROOT.
     return candidate
 
 
@@ -117,6 +150,7 @@ def local_info() -> dict[str, Any]:
         "projects_root": "/projects",
         "bindings_file": str(BINDINGS_PATH),
         "sentinel_available": True,
+        "projects": _discover_local_projects(),
     }
 
 
@@ -124,18 +158,23 @@ def local_info() -> dict[str, Any]:
 def local_folders(
     depth: int = Query(default=3, ge=1, le=6),
     max_children: int = Query(default=100, ge=10, le=500),
+    project_id: str | None = Query(default=None, max_length=200),
 ) -> dict[str, Any]:
     if not PROJECTS_ROOT.exists():
         return {"root": "/projects", "folders": [], "available": False}
     folders: list[dict[str, Any]] = []
-    for child in sorted(PROJECTS_ROOT.iterdir(), key=lambda item: item.name.lower()):
-        if not child.is_dir() or child.name in HIDDEN_NAMES or child.name.startswith("."):
-            continue
-        try:
-            child.resolve().relative_to(PROJECTS_ROOT.resolve())
-        except (OSError, ValueError):
-            continue
-        folders.append(_folder_node(child, depth - 1, max_children))
+    if project_id:
+        project_root = _project_root(project_id)
+        folders = [_folder_node(project_root, depth, max_children)]
+    else:
+        for child in sorted(PROJECTS_ROOT.iterdir(), key=lambda item: item.name.lower()):
+            if not child.is_dir() or child.name in HIDDEN_NAMES or child.name.startswith("."):
+                continue
+            try:
+                child.resolve().relative_to(PROJECTS_ROOT.resolve())
+            except (OSError, ValueError):
+                continue
+            folders.append(_folder_node(child, depth - 1, max_children))
     return {"root": "/projects", "folders": folders, "available": True}
 
 
@@ -146,12 +185,17 @@ def get_bindings() -> dict[str, Any]:
 
 @app.put("/api/v1/local/projects/{project_id}/bindings")
 def put_bindings(project_id: str, payload: FolderBindingSet) -> dict[str, Any]:
+    project_root = _project_root(project_id)
     normalized: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for item in payload.folders:
         if item.role not in VALID_ROLES:
             raise HTTPException(status_code=422, detail=f"不支持的目录用途：{item.role}")
         resolved = resolve_authorized_folder(item.path)
+        try:
+            resolved.relative_to(project_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="所选目录不属于当前业务项目的本机项目根目录") from exc
         relative = resolved.relative_to(PROJECTS_ROOT.resolve()).as_posix()
         identity = (relative, item.role)
         if identity in seen:
