@@ -6,6 +6,7 @@
   <title>AI 研发协同管理平台</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
+  <link rel="stylesheet" href="/project-intelligence.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -40,7 +41,10 @@
           <h2 id="project-title">研发项目总览</h2>
           <p id="project-subtitle"></p>
         </div>
-        <button id="refresh-btn" class="secondary-button" type="button">刷新数据</button>
+        <div class="topbar-actions">
+          <button id="project-intelligence-btn" class="secondary-button" type="button">项目认知</button>
+          <button id="refresh-btn" class="secondary-button" type="button">刷新数据</button>
+        </div>
       </header>
 
       <section id="overview" class="overview-grid"></section>
@@ -86,6 +90,80 @@
             <span id="timeline-count" class="badge neutral">0 周</span>
           </div>
           <div id="timeline" class="timeline"></div>
+        </div>
+      </section>
+    </main>
+
+    <main id="intelligence-view" class="main intelligence-main hidden">
+      <header class="topbar intelligence-topbar">
+        <div>
+          <div class="eyebrow">PROJECT KNOWLEDGE</div>
+          <h2 id="intelligence-title">项目认知</h2>
+          <p id="intelligence-subtitle">理解项目材料、版本关系和最近变化</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="intelligence-status" class="badge neutral">等待加载</span>
+          <button id="intelligence-back-btn" class="secondary-button" type="button">返回项目总览</button>
+        </div>
+      </header>
+
+      <section class="intelligence-stack">
+        <div class="panel intelligence-search-card">
+          <div class="intelligence-search-row">
+            <label class="intelligence-search-box">
+              <span>搜索项目材料</span>
+              <input id="intelligence-search-input" type="search" placeholder="输入文件名、编号、金额、功能名称、合同条款或正文关键词" autocomplete="off" />
+            </label>
+            <label class="intelligence-filter">
+              <span>材料类型</span>
+              <select id="intelligence-search-type"><option value="">全部材料</option></select>
+            </label>
+            <label class="intelligence-current-toggle"><input id="intelligence-current-only" type="checkbox" /> 只看当前有效材料</label>
+            <button id="intelligence-search-btn" class="primary-button" type="button">搜索</button>
+          </div>
+          <div id="intelligence-search-status" class="intelligence-search-hint">输入关键词即可搜索。</div>
+          <div id="intelligence-search-results" class="search-results"></div>
+        </div>
+
+        <div id="intelligence-summary" class="intelligence-summary-grid"></div>
+
+        <div class="intelligence-overview-grid">
+          <div class="panel intelligence-card">
+            <div class="intelligence-card-head">
+              <div><h3>这个项目是什么</h3><p>开发侧 AI 的项目认知与平台真实材料联合展示</p></div>
+            </div>
+            <div id="intelligence-context"></div>
+          </div>
+
+          <div class="panel intelligence-card">
+            <div class="intelligence-card-head">
+              <div><h3>材料分类</h3><p>按材料用途自动归类，不要求所有项目使用同一套目录</p></div>
+            </div>
+            <div id="intelligence-categories"></div>
+          </div>
+        </div>
+
+        <div class="intelligence-overview-grid">
+          <div class="panel intelligence-card">
+            <div class="intelligence-card-head">
+              <div><h3>材料版本与关系</h3><p>识别当前版、历史版、周报期次、合同及其补充材料</p></div>
+            </div>
+            <div id="intelligence-series"></div>
+          </div>
+
+          <div class="panel intelligence-card">
+            <div class="intelligence-card-head">
+              <div><h3>最近变化</h3><p>根据连续采集快照判断新增、修改和项目认知更新</p></div>
+            </div>
+            <div id="intelligence-changes"></div>
+          </div>
+        </div>
+
+        <div class="panel intelligence-card">
+          <div class="intelligence-card-head">
+            <div><h3>材料健康状态</h3><p>发现版本冲突、重复材料、不同开发电脑内容差异和认知过期等问题</p></div>
+          </div>
+          <div id="intelligence-health"></div>
         </div>
       </section>
     </main>
@@ -301,5 +379,6 @@
   <script src="/settings-policy.js"></script>
   <script src="/settings-model.js"></script>
   <script src="/settings-nodes.js"></script>
+  <script src="/project-intelligence.js"></script>
 </body>
 </html>
