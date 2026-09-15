@@ -1,3 +1,7 @@
+body:has(#settings-nav.active) #intelligence-view {
+  display: none !important;
+}
+
 .intelligence-main {
   overflow-y: auto;
 }
