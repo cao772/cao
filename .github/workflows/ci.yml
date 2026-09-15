@@ -44,6 +44,7 @@ jobs:
           node --check apps/web/settings-policy.js
           node --check apps/web/settings-model.js
           node --check apps/web/settings-nodes.js
+          node --check apps/web/project-intelligence.js
 
       - name: Validate configs
         env:
@@ -74,11 +75,14 @@ jobs:
           docker run --rm ai-dev-web:test sh -ec '
             root=/usr/share/nginx/html
             for file in \
-              index.html styles.css settings.css app.js settings.js \
-              settings-projects.js settings-local-scope.js settings-policy.js \
-              settings-model.js settings-nodes.js; do
+              index.html styles.css settings.css project-intelligence.css \
+              app.js settings.js settings-projects.js settings-local-scope.js \
+              settings-policy.js settings-model.js settings-nodes.js \
+              project-intelligence.js; do
               test -s "$root/$file"
             done
             grep -q "/settings.css" "$root/index.html"
             grep -q "/settings-nodes.js" "$root/index.html"
+            grep -q "/project-intelligence.css" "$root/index.html"
+            grep -q "/project-intelligence.js" "$root/index.html"
           '
