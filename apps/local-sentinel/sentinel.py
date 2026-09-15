@@ -312,6 +312,13 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
     project = manifest["project"]
     security = manifest.get("security") or {}
     git_state, repository_runtime = inspect_repositories(project_root, manifest)
+    intelligence = {
+        "schema_version": 1,
+        "context": load_project_context(project_root),
+        "search_index": build_project_search_index(project_root, manifest),
+    }
+    files = manifest_metadata(project_root, manifest)
+    files["project_intelligence"] = intelligence
     snapshot = {
         "schema_version": 1,
         "snapshot_type": "local.workspace",
@@ -324,12 +331,10 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "collector": {"name": "project-sentinel", "version": SENTINEL_VERSION},
         "security_mode": security.get("mode", "metadata_only"),
         "git": git_state,
-        "files": manifest_metadata(project_root, manifest),
-        "project_intelligence": {
-            "schema_version": 1,
-            "context": load_project_context(project_root),
-            "search_index": build_project_search_index(project_root, manifest),
-        },
+        "files": files,
+        # Kept in local/debug output for newer collectors. The central v1 schema also
+        # receives the same data through files.project_intelligence for compatibility.
+        "project_intelligence": intelligence,
     }
 
     # metadata_only 不读取正文；local_analysis 才进入增量文档解析与本地分析。
