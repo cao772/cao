@@ -21,6 +21,22 @@ def _normalize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _normalize_public_material_semantics(intelligence: dict[str, Any]) -> dict[str, Any]:
+    """Keep additive contract materials visibly distinct from the primary contract.
+
+    Contract supplements and attachments remain active evidence even when their own
+    automatically detected series contains only one file. They must never be rendered
+    as the primary contract merely because that local series has one member.
+    """
+    for material in intelligence.get("materials") or []:
+        material_type = material.get("material_type")
+        if material_type == "contract":
+            material["version_status"] = "primary"
+        elif material_type in {"contract_supplement", "contract_attachment"}:
+            material["version_status"] = "active_related"
+    return intelligence
+
+
 def _latest_snapshots(project_id: str) -> list[dict[str, Any]]:
     snapshots = main_module.latest_workspace_snapshots(project_id)
     if not snapshots:
@@ -46,11 +62,12 @@ def _history_snapshots(project_id: str, limit: int = 160) -> list[dict[str, Any]
 
 @router.get("/{project_id}/intelligence")
 def get_project_intelligence(project_id: str) -> dict[str, Any]:
-    return build_project_intelligence(
+    intelligence = build_project_intelligence(
         _latest_snapshots(project_id),
         _history_snapshots(project_id),
         include_search_index=False,
     )
+    return _normalize_public_material_semantics(intelligence)
 
 
 @router.get("/{project_id}/search")
@@ -66,6 +83,7 @@ def search_project_materials(
         _history_snapshots(project_id, 80),
         include_search_index=True,
     )
+    _normalize_public_material_semantics(intelligence)
     result = search_project_intelligence(
         intelligence,
         q,
