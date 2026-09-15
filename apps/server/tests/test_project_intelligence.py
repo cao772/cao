@@ -111,18 +111,21 @@ class ProjectIntelligenceTests(unittest.TestCase):
 
     def test_duplicate_content_and_workspace_divergence_are_visible(self) -> None:
         first = snapshot(
+            observed_at="2026-09-15T07:00:00+00:00",
             files=[
-                {"path": "docs/A.docx", "sha256": "same", "modified_at": "2026-09-10T08:00:00+00:00"},
-                {"path": "docs/A副本.docx", "sha256": "same", "modified_at": "2026-09-10T08:00:00+00:00"},
+                {"path": "docs/A.docx", "sha256": "a-old", "modified_at": "2026-09-10T08:00:00+00:00"},
+                {"path": "docs/B.docx", "sha256": "duplicate", "modified_at": "2026-09-10T08:00:00+00:00"},
+                {"path": "docs/B副本.docx", "sha256": "duplicate", "modified_at": "2026-09-10T08:00:00+00:00"},
             ],
         )
         second = snapshot(
             snapshot_id=2,
+            observed_at="2026-09-15T08:00:00+00:00",
             workspace_name="demo-copy",
             user_id="ryj",
             device_id="mac-2",
             files=[
-                {"path": "docs/A.docx", "sha256": "different", "modified_at": "2026-09-11T08:00:00+00:00"},
+                {"path": "docs/A.docx", "sha256": "a-new", "modified_at": "2026-09-11T08:00:00+00:00"},
             ],
         )
         result = build_project_intelligence([first, second])
