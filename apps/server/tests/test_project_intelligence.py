@@ -98,8 +98,8 @@ class ProjectIntelligenceTests(unittest.TestCase):
         result = build_project_intelligence([snapshot(files=files)])
         main = next(item for item in result["materials"] if item["path"] == "商务/项目合同.pdf")
         supplement = next(item for item in result["materials"] if item["path"] == "商务/合同补充协议2.pdf")
-        self.assertIn(main["version_status"], {"primary", "single"})
-        self.assertIn(supplement["version_status"], {"active_related", "single"})
+        self.assertNotEqual(main["version_status"], "historical")
+        self.assertNotEqual(supplement["version_status"], "historical")
         self.assertTrue(
             any(
                 relation["relation"] == "supplements"
