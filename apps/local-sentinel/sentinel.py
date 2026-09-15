@@ -17,6 +17,7 @@ import yaml
 from document_pipeline import analyze_project_files, is_ignored, is_sensitive_path
 from git_change_analysis import analyze_git_changes
 from multi_repository import inspect_repositories
+from project_context import load_project_context
 
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
 STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
@@ -25,7 +26,7 @@ COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 INTERVAL_SECONDS = int(os.getenv("INTERVAL_SECONDS", "900"))
 USER_ID = os.getenv("USER_ID", os.getenv("USER", "unknown"))
 DEVICE_ID = os.getenv("DEVICE_ID", socket.gethostname())
-SENTINEL_VERSION = "0.5.0"
+SENTINEL_VERSION = "0.6.0"
 
 
 def utc_now() -> str:
@@ -176,6 +177,8 @@ def safe_file_metadata(path: Path, project_root: Path) -> dict[str, Any] | None:
         "path": relative,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "system_changed_at": datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat(),
         "sha256": digest,
         "suffix": path.suffix.lower(),
     }
@@ -321,6 +324,10 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "security_mode": security.get("mode", "metadata_only"),
         "git": git_state,
         "files": manifest_metadata(project_root, manifest),
+        "project_intelligence": {
+            "schema_version": 1,
+            "context": load_project_context(project_root),
+        },
     }
 
     # metadata_only 不读取正文；local_analysis 才进入增量文档解析与本地分析。
