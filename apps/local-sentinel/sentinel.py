@@ -18,6 +18,7 @@ from document_pipeline import analyze_project_files, is_ignored, is_sensitive_pa
 from git_change_analysis import analyze_git_changes
 from multi_repository import inspect_repositories
 from project_context import load_project_context
+from project_search_index import build_project_search_index
 
 PROJECTS_ROOT = Path(os.getenv("PROJECTS_ROOT", "/projects"))
 STATE_ROOT = Path(os.getenv("SENTINEL_STATE_ROOT", "/state"))
@@ -327,6 +328,7 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "project_intelligence": {
             "schema_version": 1,
             "context": load_project_context(project_root),
+            "search_index": build_project_search_index(project_root, manifest),
         },
     }
 
