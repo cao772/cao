@@ -8,11 +8,14 @@ from mcp.server.fastmcp import FastMCP
 from agent_bridge import (
     AGENT_NAME,
     AGENT_VENDOR,
+    find_project,
     get_project_context,
     get_project_tasks,
     list_managed_projects,
 )
 from agent_session_bridge import report_agent_event_v2
+from project_context import write_project_context
+from sentinel import DEVICE_ID, USER_ID
 
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "6410"))
@@ -21,8 +24,10 @@ mcp = FastMCP(
     "AI Dev Project Sentinel",
     instructions=(
         "Use this server to read shared project context and report structured coding-agent activity. "
-        "Do not treat task.finished as formal delivery; the central evidence engine independently verifies "
-        "local Git, tests, GitLab/GitHub, CI, merge and deployment facts."
+        "When you have learned durable project facts, folder purposes, important files, document series, current stage, "
+        "known issues or current work, call update_project_context so the shared project cognition stays current. "
+        "Do not write credentials or secrets into project context. Do not treat task.finished as formal delivery; "
+        "the central evidence engine independently verifies local Git, tests, GitLab/GitHub, CI, merge and deployment facts."
     ),
     host=MCP_HOST,
     port=MCP_PORT,
@@ -45,6 +50,35 @@ def get_context(project_id: str) -> dict[str, Any]:
 def get_tasks(project_id: str) -> dict[str, Any]:
     """Get the central task/evidence view for one project without returning source code or document bodies."""
     return get_project_tasks(project_id)
+
+
+@mcp.tool()
+def update_project_context(project_id: str, context: dict[str, Any]) -> dict[str, Any]:
+    """Update the shared .project-intelligence/project_context.yaml with durable facts learned by this coding agent.
+
+    Prefer stable information such as project purpose, current stage, folder roles, important files, material/document
+    series, workflows, known facts, current work and known issues. This is supporting evidence, not authoritative truth;
+    the central platform cross-checks it against real files, timestamps, Git and other evidence.
+    """
+    project_root, _manifest = find_project(project_id)
+    result = write_project_context(
+        project_root,
+        context,
+        generator={
+            "type": "coding_agent",
+            "vendor": AGENT_VENDOR,
+            "name": AGENT_NAME,
+            "user_id": USER_ID,
+            "device_id": DEVICE_ID,
+        },
+    )
+    return {
+        "updated": True,
+        "project_id": project_id,
+        "context_path": result.get("path"),
+        "modified_at": result.get("modified_at"),
+        "valid": result.get("valid"),
+    }
 
 
 def _report(
