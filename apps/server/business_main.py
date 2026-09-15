@@ -8,6 +8,7 @@ from node_status import router as node_status_router
 from people_identity import router as people_identity_router
 from people_store import resolve_contributors
 from platform_config import router as platform_router
+from project_intelligence_api import router as project_intelligence_router
 from project_settings import router as project_settings_router
 
 
@@ -49,3 +50,4 @@ app.include_router(model_config_router)
 app.include_router(node_status_router)
 app.include_router(people_identity_router)
 app.include_router(agent_router)
+app.include_router(project_intelligence_router)
