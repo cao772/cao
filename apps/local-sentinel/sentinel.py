@@ -312,8 +312,26 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
     project = manifest["project"]
     security = manifest.get("security") or {}
     git_state, repository_runtime = inspect_repositories(project_root, manifest)
+    project_profile = {
+        "project_id": project["id"],
+        "project_name": project["name"],
+        "description": project.get("description"),
+        "owner": project.get("owner"),
+        "team": project.get("team"),
+        "repositories": [
+            {
+                "id": repository.get("id"),
+                "role": repository.get("role"),
+                "provider": repository.get("provider"),
+                "url": repository.get("url"),
+                "primary": bool(repository.get("primary")),
+            }
+            for repository, _repo_path, _git_state in repository_runtime
+        ],
+    }
     intelligence = {
         "schema_version": 1,
+        "profile": project_profile,
         "context": load_project_context(project_root),
         "search_index": build_project_search_index(project_root, manifest),
     }
@@ -325,6 +343,7 @@ def build_snapshot(project_root: Path, manifest: dict[str, Any]) -> dict[str, An
         "observed_at": utc_now(),
         "project_id": project["id"],
         "project_name": project["name"],
+        "project_profile": project_profile,
         "user_id": USER_ID,
         "device_id": DEVICE_ID,
         "workspace_name": project_root.name,

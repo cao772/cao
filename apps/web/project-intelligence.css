@@ -174,6 +174,67 @@ body:has(#settings-nav.active) #intelligence-view {
   white-space: nowrap;
 }
 
+.progress-stage {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #dbe6ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.progress-stage span,
+.progress-section > strong {
+  color: #5c7388;
+  font-size: 11px;
+}
+
+.progress-stage strong { color: #294e6b; }
+
+.progress-section + .progress-section { margin-top: 12px; }
+
+.progress-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #536d84;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.compact-empty {
+  padding: 7px 0 0;
+  text-align: left;
+}
+
+.repository-list {
+  border: 1px solid #e0e7ee;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.repository-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: 13px 15px;
+  border-bottom: 1px solid #e8edf2;
+  background: #fff;
+}
+
+.repository-item:last-child { border-bottom: 0; }
+
+.repository-item strong { color: #2c4d68; font-size: 12px; }
+
+.repository-meta {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  color: #8292a1;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .material-category-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -367,4 +428,6 @@ body:has(#settings-nav.active) #intelligence-view {
   .material-category-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .intelligence-list-item { grid-template-columns: 1fr; }
   .intelligence-list-meta { justify-items: start; white-space: normal; }
+  .repository-item { grid-template-columns: 1fr; }
+  .repository-meta { justify-items: start; white-space: normal; }
 }

@@ -94,6 +94,22 @@ def all_project_runtime_settings() -> dict[str, dict[str, Any]]:
     return {str(item["project_id"]): get_project_runtime_settings(str(item["project_id"])) for item in projects}
 
 
+def configured_project_runtime_settings() -> dict[str, dict[str, Any]]:
+    """Return only settings explicitly saved in Central.
+
+    A project.yaml may deliberately enable a tightly scoped local-analysis policy.
+    Returning synthetic defaults to Sentinel made those defaults look like an explicit
+    platform choice and silently replaced the manifest policy on every scan.
+    """
+    init_project_settings_db()
+    with platform_config._db() as conn:
+        rows = conn.execute("SELECT project_id FROM project_runtime_settings").fetchall()
+    return {
+        str(row["project_id"]): get_project_runtime_settings(str(row["project_id"]))
+        for row in rows
+    }
+
+
 @router.get("/platform/project-settings")
 def list_project_runtime_settings() -> dict[str, Any]:
     settings = all_project_runtime_settings()
@@ -147,5 +163,5 @@ def internal_project_runtime_settings(
 ) -> dict[str, Any]:
     if platform_config.COLLECTOR_TOKEN and x_collector_token != platform_config.COLLECTOR_TOKEN:
         raise HTTPException(status_code=401, detail="invalid collector token")
-    settings = all_project_runtime_settings()
+    settings = configured_project_runtime_settings()
     return {"version": 1, "projects": settings}

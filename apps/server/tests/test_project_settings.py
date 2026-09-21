@@ -70,6 +70,17 @@ def test_metadata_only_forces_content_analysis_off(tmp_path, monkeypatch):
 
 def test_internal_runtime_settings_requires_collector_token(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
+    configured = client.put(
+        "/api/v1/platform/projects/p1/settings",
+        json={
+            "enabled": True,
+            "security_mode": "local_analysis",
+            "analysis_enabled": True,
+            "use_llm": False,
+            "include": ["documents"],
+        },
+    )
+    assert configured.status_code == 200
     monkeypatch.setattr(platform_config, "COLLECTOR_TOKEN", "secret")
     denied = client.get("/api/v1/internal/projects/runtime-settings")
     assert denied.status_code == 401
@@ -79,3 +90,14 @@ def test_internal_runtime_settings_requires_collector_token(tmp_path, monkeypatc
     )
     assert allowed.status_code == 200
     assert "p1" in allowed.json()["projects"]
+
+
+def test_internal_runtime_settings_omit_unsaved_defaults(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(platform_config, "COLLECTOR_TOKEN", "secret")
+    response = client.get(
+        "/api/v1/internal/projects/runtime-settings",
+        headers={"X-Collector-Token": "secret"},
+    )
+    assert response.status_code == 200
+    assert response.json()["projects"] == {}

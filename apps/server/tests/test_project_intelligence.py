@@ -42,6 +42,36 @@ def snapshot(
 
 
 class ProjectIntelligenceTests(unittest.TestCase):
+    def test_profile_keeps_project_background_and_repository_runtime_state(self) -> None:
+        item = snapshot(files=[])
+        item["payload"]["project_intelligence"]["profile"] = {
+            "project_id": "demo",
+            "project_name": "示例项目",
+            "description": "用于验证项目资料和研发进度。",
+            "owner": "caoyh",
+            "team": "ai-project",
+        }
+        item["payload"]["git"] = {
+            "repositories": [
+                {
+                    "repository_id": "demo-api",
+                    "role": "backend",
+                    "provider": "gitlab",
+                    "repository_url": "https://git.example.com/demo/api.git",
+                    "branch": "main",
+                    "head": "1234567890abcdef",
+                    "dirty": True,
+                    "primary": True,
+                }
+            ]
+        }
+
+        result = build_project_intelligence([item])
+
+        self.assertEqual(result["profile"]["description"], "用于验证项目资料和研发进度。")
+        self.assertEqual(result["profile"]["repositories"][0]["id"], "demo-api")
+        self.assertTrue(result["profile"]["repositories"][0]["dirty"])
+
     def test_agent_context_current_file_beats_newer_filesystem_mtime(self) -> None:
         context = {
             "schema_version": 1,

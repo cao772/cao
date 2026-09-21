@@ -13,6 +13,8 @@ const intelligenceEls = {
   status: document.getElementById('intelligence-status'),
   summary: document.getElementById('intelligence-summary'),
   context: document.getElementById('intelligence-context'),
+  progress: document.getElementById('intelligence-progress'),
+  repositories: document.getElementById('intelligence-repositories'),
   categories: document.getElementById('intelligence-categories'),
   series: document.getElementById('intelligence-series'),
   changes: document.getElementById('intelligence-changes'),
@@ -105,8 +107,8 @@ function renderIntelligenceSummary(data) {
     <div class="intelligence-summary-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>
   `).join('');
 
-  const project = context.project || {};
-  const purpose = project.purpose || project.description || '开发侧 AI 尚未提供项目用途说明，平台已根据实际材料建立基础索引。';
+  const project = { ...(data.profile || {}), ...(context.project || {}) };
+  const purpose = project.purpose || project.description || '尚未录入项目背景；平台已根据本机材料和代码活动建立项目索引。';
   const currentStage = project.current_stage || '尚未明确';
   intelligenceEls.context.innerHTML = `
     <div class="context-purpose"><strong>项目用途</strong><br>${escapeHtml(purpose)}</div>
@@ -116,6 +118,47 @@ function renderIntelligenceSummary(data) {
       <div class="context-block"><strong>已知问题</strong>${intelligencePills(context.known_issues, 'fact')}</div>
       <div class="context-block"><strong>开发侧 AI 已知事实</strong>${intelligencePills(context.known_facts, 'fact')}</div>
     </div>`;
+}
+
+function progressItems(items, emptyText) {
+  if (!items?.length) return `<div class="intelligence-empty compact-empty">${escapeHtml(emptyText)}</div>`;
+  return `<ul class="progress-list">${items.slice(0, 6).map(item => `<li>${escapeHtml(intelligenceListText(item))}</li>`).join('')}</ul>`;
+}
+
+function renderProgress(data) {
+  const progress = data.progress || {};
+  const stage = progress.current_stage || '尚未形成明确阶段';
+  intelligenceEls.progress.innerHTML = `
+    <div class="progress-stage"><span>当前阶段</span><strong>${escapeHtml(stage)}</strong></div>
+    <div class="progress-section"><strong>已完成</strong>${progressItems(progress.completed, '暂无可确认的已完成事项')}</div>
+    <div class="progress-section"><strong>进行中</strong>${progressItems(progress.in_progress, '当前没有已识别的明确任务')}</div>
+    <div class="progress-section"><strong>待处理问题</strong>${progressItems(progress.issues, '当前没有来自项目资料的待处理问题')}</div>
+    <div class="progress-section"><strong>下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步')}</div>`;
+}
+
+function repositoryLabel(repository) {
+  const id = repository.id || '未命名仓库';
+  const role = repository.role ? ` · ${repository.role}` : '';
+  return `${id}${role}`;
+}
+
+function renderRepositories(data) {
+  const repositories = data.profile?.repositories || [];
+  if (!repositories.length) {
+    intelligenceEls.repositories.innerHTML = '<div class="intelligence-empty">尚未采集到代码仓库；可在平台配置中绑定本机目录或远端仓库。</div>';
+    return;
+  }
+  intelligenceEls.repositories.innerHTML = `<div class="repository-list">${repositories.map(repository => {
+    const provider = repository.provider || '本机';
+    const branch = repository.branch || '未识别分支';
+    const head = repository.head ? String(repository.head).slice(0, 10) : '未识别 SHA';
+    const sync = repository.ahead || repository.behind ? `领先 ${repository.ahead || 0} / 落后 ${repository.behind || 0}` : '与上游同步';
+    const worktree = repository.dirty ? '有本地修改' : '工作区干净';
+    return `<div class="repository-item">
+      <div><strong>${escapeHtml(repositoryLabel(repository))}</strong><div class="intelligence-list-path">${escapeHtml(repository.url || '未记录远端地址')}</div></div>
+      <div class="repository-meta"><span>${escapeHtml(provider)}</span><span>${escapeHtml(branch)} · ${escapeHtml(head)}</span><span>${escapeHtml(sync)} · ${escapeHtml(worktree)}</span></div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function renderMaterialCategories(data) {
@@ -283,6 +326,8 @@ async function loadProjectIntelligence(projectId) {
   const data = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/intelligence`);
   intelligenceState.data = data;
   renderIntelligenceSummary(data);
+  renderProgress(data);
+  renderRepositories(data);
   renderMaterialCategories(data);
   renderSeries(data);
   renderRecentChanges(data);

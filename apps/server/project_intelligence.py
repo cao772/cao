@@ -161,6 +161,45 @@ def _context_sources(latest_snapshots: list[dict[str, Any]]) -> list[dict[str, A
     return sources
 
 
+def _project_profile(latest_snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a safe, source-backed project card from the latest local snapshot."""
+    latest = max(latest_snapshots, key=lambda item: _dt_key(item.get("observed_at")))
+    payload = latest.get("payload") or {}
+    raw = ((payload.get("project_intelligence") or {}).get("profile") or payload.get("project_profile") or {})
+    if not isinstance(raw, dict):
+        raw = {}
+    git = payload.get("git") or {}
+    runtime_repositories = git.get("repositories") if isinstance(git, dict) else []
+    repositories = runtime_repositories if isinstance(runtime_repositories, list) and runtime_repositories else raw.get("repositories")
+    normalized_repositories: list[dict[str, Any]] = []
+    for repository in repositories or []:
+        if not isinstance(repository, dict):
+            continue
+        normalized_repositories.append(
+            {
+                "id": repository.get("repository_id") or repository.get("id"),
+                "role": repository.get("role"),
+                "provider": repository.get("provider"),
+                "url": repository.get("repository_url") or repository.get("url"),
+                "branch": repository.get("branch"),
+                "head": repository.get("head"),
+                "ahead": repository.get("ahead"),
+                "behind": repository.get("behind"),
+                "dirty": bool(repository.get("dirty")),
+                "primary": bool(repository.get("primary")),
+            }
+        )
+    return {
+        "project_id": raw.get("project_id") or payload.get("project_id"),
+        "project_name": raw.get("project_name") or payload.get("project_name"),
+        "description": raw.get("description"),
+        "owner": raw.get("owner"),
+        "team": raw.get("team"),
+        "repositories": normalized_repositories,
+        "observed_at": latest.get("observed_at"),
+    }
+
+
 def _context_maps(context: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     important: dict[str, dict[str, Any]] = {}
     for raw in context.get("important_files") or []:
@@ -379,6 +418,7 @@ def build_project_intelligence(
     context_sources = _context_sources(latest_snapshots)
     context_source = context_sources[0] if context_sources else None
     context = dict((context_source or {}).get("data") or {})
+    profile = _project_profile(latest_snapshots)
     important, series_defs, folders = _context_maps(context)
 
     variants: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -662,6 +702,7 @@ def build_project_intelligence(
 
     return {
         "version": 1,
+        "profile": profile,
         "context": {
             "available": bool(context_source),
             "generated_at": (context_source or {}).get("generated_at"),

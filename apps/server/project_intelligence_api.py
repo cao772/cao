@@ -67,6 +67,7 @@ def get_project_intelligence(project_id: str) -> dict[str, Any]:
         _history_snapshots(project_id),
         include_search_index=False,
     )
+    intelligence["progress"] = dict(main_module.project_brief(project_id) or {})
     return _normalize_public_material_semantics(intelligence)
 
 
