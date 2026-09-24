@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 import main as main_module
+from conversation_intelligence import project_summary, search_messages
 from project_intelligence import build_project_intelligence, search_project_intelligence
 
 router = APIRouter(prefix="/api/v1/projects", tags=["project-intelligence"])
@@ -68,6 +69,8 @@ def get_project_intelligence(project_id: str) -> dict[str, Any]:
         include_search_index=False,
     )
     intelligence["progress"] = dict(main_module.project_brief(project_id) or {})
+    with main_module.get_db() as conn:
+        intelligence["communications"] = project_summary(conn, project_id)
     return _normalize_public_material_semantics(intelligence)
 
 
@@ -92,7 +95,16 @@ def search_project_materials(
         current_only=current_only,
         limit=limit,
     )
+    material_count = int(result.get("count") or 0)
+    communications = []
+    if not material_type and not current_only:
+        with main_module.get_db() as conn:
+            communications = search_messages(conn, project_id, q, limit=limit)
     result["project_id"] = project_id
+    result["material_count"] = material_count
+    result["communications"] = communications
+    result["communication_count"] = len(communications)
+    result["count"] = material_count + len(communications)
     result["search_indexed_file_count"] = (intelligence.get("summary") or {}).get("search_indexed_file_count", 0)
     result["content_search_available"] = bool(result["search_indexed_file_count"])
     return result
