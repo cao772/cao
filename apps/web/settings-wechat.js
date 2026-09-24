@@ -118,10 +118,12 @@ async function loadWeChatConfig(showMessage) {
     wechatEls.enabled.checked = wechatConfig.enabled !== false;
     renderWeChatBindings();
     const available = Boolean(health.wechat && health.wechat.available);
-    wechatEls.state.textContent = available ? "微信已连接" : "助手在线，微信待授权";
-    wechatEls.state.className = "connection-state " + (available ? "ok" : "error");
+    const captureMode = health.wechat && health.wechat.capture_mode;
+    const captureReady = available && Boolean(captureMode) && captureMode !== "safe_adapter_required";
+    wechatEls.state.textContent = captureReady ? "微信采集就绪" : (available ? "微信运行中，采集待校准" : "助手在线，微信待授权");
+    wechatEls.state.className = "connection-state " + (captureReady ? "ok" : (available ? "" : "error"));
     if (showMessage) {
-      setWeChatMessage(available ? "宿主机助手正常，定时计划已加载。" : "宿主机助手已启动：" + ((health.wechat && health.wechat.reason) || "微信暂不可读取"), !available);
+      setWeChatMessage(captureReady ? "宿主机助手正常，定时计划与群绑定已加载。" : (available ? "群绑定已保存；当前版本仍需校准微信控件，尚未自动读取或上传消息。" : "宿主机助手已启动：" + ((health.wechat && health.wechat.reason) || "微信暂不可读取")), !available);
     }
   } catch (error) {
     wechatEls.state.textContent = "宿主机助手未连接";

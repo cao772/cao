@@ -28,7 +28,9 @@ def main() -> int:
 
     venv_root = state_root / "wechat-helper-venv"
     if not (venv_root / "bin" / "python").exists():
-        venv.EnvBuilder(with_pip=True, clear=False).create(venv_root)
+        # uv-managed macOS Pythons cannot be relocated by copying the binary:
+        # the copied interpreter loses its standard-library prefix.
+        venv.EnvBuilder(with_pip=True, clear=False, symlinks=True).create(venv_root)
 
     python = venv_root / "bin" / "python"
     requirements = script_dir / "requirements.txt"
