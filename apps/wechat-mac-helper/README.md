@@ -34,3 +34,21 @@ V1 不会自动键入群名、点击搜索结果或操作发送框。未经目�
     ~/Library/Application Support/AI Dev Management
 
 不要监听 0.0.0.0。
+
+
+## 常驻运行
+
+先在终端手工启动一次，确认微信与辅助功能授权正常，再安装登录常驻：
+
+    export CENTRAL_URL=http://127.0.0.1:8080
+    export COLLECTOR_TOKEN='与中央服务一致的 token'
+    export USER_ID='你的平台用户标识'
+    python3 apps/wechat-mac-helper/install_macos.py
+
+安装后使用 macOS LaunchAgent 常驻；助手自己按本机时区执行 09:00、09:30 ... 19:30、20:00 的采集槽。
+
+卸载常驻服务但保留本地配置与去重状态：
+
+    python3 apps/wechat-mac-helper/uninstall_macos.py
+
+注意：LaunchAgent 运行身份仍需获得 macOS Accessibility 权限。正式启用自动读取前，先通过只读校准接口确认当前微信版本的控件结构。
