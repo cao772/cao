@@ -65,3 +65,27 @@ def test_seen_state_roundtrip(tmp_path: Path):
     state = SeenState(tmp_path / "seen.json")
     state.save({"b", "a"})
     assert state.load() == {"a", "b"}
+
+
+def test_accessibility_parser_hides_text_fields_by_default():
+    from wechat_helper import _parse_accessibility_rows
+
+    rows = _parse_accessibility_rows(
+        "AXButton\tAXCloseButton\t关闭\t敏感名称\t敏感值\n"
+        "AXStaticText\t\t消息\t群聊正文\t正文值",
+        include_text=False,
+    )
+    assert rows[0] == {"role": "AXButton", "subrole": "AXCloseButton", "description": "关闭"}
+    assert "name" not in rows[1]
+    assert "value" not in rows[1]
+
+
+def test_accessibility_parser_exposes_text_only_when_explicit():
+    from wechat_helper import _parse_accessibility_rows
+
+    rows = _parse_accessibility_rows(
+        "AXStaticText\t\t消息\t群聊正文\t正文值",
+        include_text=True,
+    )
+    assert rows[0]["name"] == "群聊正文"
+    assert rows[0]["value"] == "正文值"

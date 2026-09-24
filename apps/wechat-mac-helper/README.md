@@ -12,12 +12,13 @@ M7 V1 宿主机助手。它必须运行在 macOS 宿主机，而不是 Docker �
 - GET /health 检查微信运行状态和 Accessibility 基础可用性。
 - GET/PUT /api/v1/wechat/config 管理授权群和计划。
 - POST /api/v1/wechat/scan 手工触发。
+- GET /api/v1/wechat/accessibility-snapshot 手动读取前台微信控件树用于校准；默认 include_text=false，不返回 name/value 文本字段。
 
 ## 安全边界
 
 V1 不会自动键入群名、点击搜索结果或操作发送框。未经目标 Mac 的真实控件树校准就做 UI 导航，存在把文本输入聊天编辑框的风险。
 
-因此当前分支先完成调度、授权、增量、中央存储和检索闭环，并提供微信/Accessibility 探测。下一步在目标 Mac 上只读采集 Accessibility 树，确认控件角色后再启用群聊自动读取适配器。
+因此当前分支先完成调度、授权、增量、中央存储和检索闭环，并提供微信/Accessibility 探测。首次在目标 Mac 上调用只读校准接口，确认控件角色后再启用群聊自动读取适配器。校准接口不会点击、聚焦、输入、滚动或修改微信状态。
 
 ## 启动
 

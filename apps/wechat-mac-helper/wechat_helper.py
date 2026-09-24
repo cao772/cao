@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -110,6 +110,131 @@ def probe_wechat() -> dict[str, Any]:
         "reason": None,
         "capture_mode": "safe_adapter_required",
         "note": "已完成授权、调度、去重和上传闭环；群聊控件树需在目标 Mac 上校准后启用只读自动采集。",
+    }
+
+
+def _parse_accessibility_rows(output: str, include_text: bool) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("__"):
+            continue
+        parts = line.split("\t")
+        while len(parts) < 5:
+            parts.append("")
+        item: dict[str, Any] = {
+            "role": parts[0],
+            "subrole": parts[1] or None,
+            "description": parts[2] or None,
+        }
+        if include_text:
+            item["name"] = parts[3] or None
+            item["value"] = parts[4] or None
+        items.append(item)
+    return items
+
+
+def accessibility_snapshot(include_text: bool = False, max_items: int = 600) -> dict[str, Any]:
+    """Read only the current WeChat front-window Accessibility tree.
+
+    This diagnostic never clicks, focuses, types, scrolls or changes WeChat state.
+    Text-bearing fields are excluded by default and must be explicitly requested.
+    """
+    if platform.system() != "Darwin":
+        return {"available": False, "reason": "macOS host helper required", "items": []}
+
+    include_flag = "true" if include_text else "false"
+    script = f"""
+on cleanField(v)
+    try
+        set t to v as text
+    on error
+        set t to ""
+    end try
+    set AppleScript's text item delimiters to tab
+    set pieces to text items of t
+    set AppleScript's text item delimiters to " "
+    set t to pieces as text
+    set AppleScript's text item delimiters to linefeed
+    set pieces to text items of t
+    set AppleScript's text item delimiters to " "
+    set t to pieces as text
+    set AppleScript's text item delimiters to return
+    set pieces to text items of t
+    set AppleScript's text item delimiters to " "
+    set t to pieces as text
+    set AppleScript's text item delimiters to ""
+    return t
+end cleanField
+
+tell application "System Events"
+    if exists process "WeChat" then
+        set p to process "WeChat"
+    else if exists process "微信" then
+        set p to process "微信"
+    else
+        return "__NO_PROCESS__"
+    end if
+    tell p
+        if (count of windows) is 0 then return "__NO_WINDOW__"
+        set allItems to entire contents of front window
+        set rows to {{}}
+        set itemCount to 0
+        repeat with uiItem in allItems
+            set itemCount to itemCount + 1
+            if itemCount > {int(max_items)} then exit repeat
+            set roleText to ""
+            set subroleText to ""
+            set descText to ""
+            set nameText to ""
+            set valueText to ""
+            try
+                set roleText to my cleanField(role of uiItem)
+            end try
+            try
+                set subroleText to my cleanField(subrole of uiItem)
+            end try
+            try
+                set descText to my cleanField(description of uiItem)
+            end try
+            if {include_flag} then
+                try
+                    set nameText to my cleanField(name of uiItem)
+                end try
+                try
+                    set valueText to my cleanField(value of uiItem)
+                end try
+            end if
+            set end of rows to roleText & tab & subroleText & tab & descText & tab & nameText & tab & valueText
+        end repeat
+        set AppleScript's text item delimiters to linefeed
+        set resultText to rows as text
+        set AppleScript's text item delimiters to ""
+        return resultText
+    end tell
+end tell
+"""
+    code, output = _run_osascript(script, timeout=15)
+    if code != 0:
+        return {
+            "available": False,
+            "reason": output or "无法读取微信 Accessibility 控件树",
+            "items": [],
+        }
+    if output == "__NO_PROCESS__":
+        return {"available": False, "reason": "个人微信客户端未运行", "items": []}
+    if output == "__NO_WINDOW__":
+        return {"available": False, "reason": "微信没有可读取的前台窗口", "items": []}
+
+    items = _parse_accessibility_rows(output, include_text)
+    return {
+        "available": True,
+        "read_only": True,
+        "include_text": include_text,
+        "item_count": len(items),
+        "truncated": len(items) >= max_items,
+        "items": items,
+        "note": "这是手动校准快照；定时采集器不会自动调用该接口。",
     }
 
 
@@ -268,6 +393,16 @@ def put_config(payload: WeChatConfigIn) -> dict[str, Any]:
         return save_config(payload.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+
+
+@app.get("/api/v1/wechat/accessibility-snapshot")
+def get_accessibility_snapshot(
+    include_text: bool = Query(default=False),
+    max_items: int = Query(default=600, ge=20, le=1500),
+) -> dict[str, Any]:
+    return accessibility_snapshot(include_text=include_text, max_items=max_items)
 
 
 @app.post("/api/v1/wechat/scan")
