@@ -412,6 +412,11 @@ async function selectProject(projectId) {
   const project = state.projects.find(item => item.project_id === projectId) || {};
   els.title.textContent = projectLabel(project);
   els.subtitle.textContent = '';
+  els.overview.innerHTML = metric('项目状态', '正在加载', '正在读取项目进展', true);
+  els.taskTable.innerHTML = '<div class="empty">正在加载当前任务…</div>';
+  els.projectMemory.innerHTML = '<div class="empty">正在加载项目进展…</div>';
+  els.contributors.innerHTML = '<div class="empty">正在加载人员协作…</div>';
+  els.timeline.innerHTML = '<div class="empty">正在加载每周进展…</div>';
   try {
     state.detail = await loadProject(projectId);
     renderOverview(project, state.detail);
@@ -420,13 +425,29 @@ async function selectProject(projectId) {
     renderContributors(state.detail);
     renderTimeline(state.detail);
   } catch (error) {
+    els.overview.innerHTML = metric('项目状态', '加载失败', '请点击“刷新数据”重试', true);
+    els.taskTable.innerHTML = '<div class="empty">当前任务加载失败</div>';
+    els.projectMemory.innerHTML = '<div class="empty">项目进展加载失败</div>';
+    els.contributors.innerHTML = '<div class="empty">人员协作加载失败</div>';
+    els.timeline.innerHTML = '<div class="empty">每周进展加载失败</div>';
     showToast(`加载项目失败：${error.message}`, true);
   }
 }
 
 async function bootstrap() {
+  if (!state.projects.length) {
+    els.projectList.innerHTML = '<div class="empty">正在加载项目…</div>';
+    els.title.textContent = '正在加载项目';
+    els.overview.innerHTML = metric('项目状态', '正在加载', '正在连接项目数据', true);
+    els.taskTable.innerHTML = '<div class="empty">正在加载当前任务…</div>';
+    els.projectMemory.innerHTML = '<div class="empty">正在加载项目进展…</div>';
+    els.contributors.innerHTML = '<div class="empty">正在加载人员协作…</div>';
+    els.timeline.innerHTML = '<div class="empty">正在加载每周进展…</div>';
+  }
+  let healthOk = false;
   try {
     await api('/health');
+    healthOk = true;
     els.apiState.className = 'health-dot ok';
     els.apiStateText.textContent = '服务正常';
     state.projects = await api('/api/v1/projects');
@@ -443,18 +464,28 @@ async function bootstrap() {
       els.contributors.innerHTML = '<div class="empty">暂无人员数据</div>';
       els.timeline.innerHTML = '<div class="empty">暂无周度进展</div>';
     }
+    return true;
   } catch (error) {
     els.apiState.className = 'health-dot error';
-    els.apiStateText.textContent = '服务不可用';
+    els.apiStateText.textContent = healthOk ? '项目数据读取失败' : '服务不可用';
+    if (!state.projects.length) {
+      els.projectList.innerHTML = '<div class="empty">项目加载失败，请点击“刷新数据”重试。</div>';
+      els.title.textContent = '项目加载失败';
+      els.overview.innerHTML = metric('项目状态', '加载失败', '请点击“刷新数据”重试', true);
+      els.taskTable.innerHTML = '<div class="empty">当前任务加载失败</div>';
+      els.projectMemory.innerHTML = '<div class="empty">项目进展加载失败</div>';
+      els.contributors.innerHTML = '<div class="empty">人员协作加载失败</div>';
+      els.timeline.innerHTML = '<div class="empty">每周进展加载失败</div>';
+    }
     showToast(`连接服务失败：${error.message}`, true);
+    return false;
   }
 }
 
 els.refresh.addEventListener('click', async () => {
   els.refresh.disabled = true;
   try {
-    await bootstrap();
-    showToast('数据已刷新');
+    if (await bootstrap()) showToast('数据已刷新');
   } finally {
     els.refresh.disabled = false;
   }
