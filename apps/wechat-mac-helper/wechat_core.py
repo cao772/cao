@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
@@ -174,4 +175,5 @@ class SeenState:
         values = sorted(fingerprints)[-self.max_items :]
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"version": 1, "fingerprints": values}, ensure_ascii=False), encoding="utf-8")
+        os.chmod(tmp, 0o600)
         tmp.replace(self.path)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
 import shutil
@@ -18,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from wechat_core import SeenState, classify_message, event_fingerprint, next_run_at, normalize_config, scheduled_slot
+from tracememo_adapter import TraceMemoError, TraceMemoReader, extract_message, resolve_bound_group
 
 STATE_ROOT = Path(
     os.getenv(
@@ -27,6 +29,11 @@ STATE_ROOT = Path(
 )
 CONFIG_PATH = STATE_ROOT / "wechat-config.json"
 SEEN_PATH = STATE_ROOT / "wechat-seen.json"
+CURSOR_PATH = STATE_ROOT / "wechat-tracememo-cursors.json"
+TRACEMEMO_TOKEN_FILE = Path(os.getenv("TRACEMEMO_TOKEN_FILE", str(STATE_ROOT / "tracememo-api-token")))
+TRACEMEMO_API_URL = os.getenv("TRACEMEMO_API_URL", "http://127.0.0.1:6131")
+INITIAL_LOOKBACK_DAYS = max(1, min(int(os.getenv("WECHAT_INITIAL_LOOKBACK_DAYS", "30")), 90))
+CURSOR_OVERLAP_SECONDS = 24 * 3600
 CENTRAL_URL = os.getenv("CENTRAL_URL", "").rstrip("/")
 COLLECTOR_TOKEN = os.getenv("COLLECTOR_TOKEN", "")
 USER_ID = os.getenv("USER_ID", os.getenv("USER", "developer"))
@@ -95,21 +102,17 @@ def _run_osascript(script: str, timeout: int = 8) -> tuple[int, str]:
 def probe_wechat() -> dict[str, Any]:
     if platform.system() != "Darwin":
         return {"available": False, "reason": "macOS host helper required"}
-    code, output = _run_osascript(
-        'tell application "System Events" to return (exists process "WeChat") or (exists process "微信")'
-    )
-    if code != 0:
-        return {
-            "available": False,
-            "reason": "无法访问 macOS 辅助功能；请给宿主机微信助手授予“辅助功能”权限",
-        }
-    if output.lower() != "true":
-        return {"available": False, "reason": "个人微信客户端未运行"}
+    try:
+        ready = TraceMemoReader(TRACEMEMO_TOKEN_FILE, TRACEMEMO_API_URL).is_ready()
+    except TraceMemoError as exc:
+        return {"available": False, "reason": str(exc)}
+    if not ready:
+        return {"available": False, "reason": "TraceMemo 本地数据库尚未连接"}
     return {
         "available": True,
         "reason": None,
-        "capture_mode": "safe_adapter_required",
-        "note": "已完成授权、调度、去重和上传闭环；群聊控件树需在目标 Mac 上校准后启用只读自动采集。",
+        "capture_mode": "tracememo_local_api",
+        "note": "仅按项目绑定读取授权群的文本与文件标题；不读取其他聊天或媒体内容。",
     }
 
 
@@ -265,14 +268,18 @@ def normalize_message(binding: dict[str, str], raw: dict[str, Any]) -> dict[str,
     observed_at = str(raw.get("observed_at") or datetime.now().astimezone().isoformat())
     sender = str(raw.get("sender") or "").strip() or None
     message_type = str(raw.get("message_type") or "text")
-    fingerprint = event_fingerprint(
-        project_id=binding["project_id"],
-        group_name=binding["group_name"],
-        sender=sender,
-        text=text,
-        observed_at=observed_at,
-        message_type=message_type,
-    )
+    source_fingerprint = str(raw.get("source_fingerprint") or "")
+    if len(source_fingerprint) == 64 and all(c in "0123456789abcdef" for c in source_fingerprint):
+        fingerprint = hashlib.sha256(f"{binding['project_id']}:{source_fingerprint}".encode()).hexdigest()
+    else:
+        fingerprint = event_fingerprint(
+            project_id=binding["project_id"],
+            group_name=binding["group_name"],
+            sender=sender,
+            text=text,
+            observed_at=observed_at,
+            message_type=message_type,
+        )
     return {
         "schema_version": 1,
         "event_fingerprint": fingerprint,
@@ -287,25 +294,96 @@ def normalize_message(binding: dict[str, str], raw: dict[str, Any]) -> dict[str,
         "user_id": USER_ID,
         "device_id": DEVICE_ID,
         "categories": classify_message(text),
-        "metadata": {"collector": "wechat-mac-helper", "collector_version": "0.1.0"},
+        "metadata": {"collector": "wechat-mac-helper", "adapter": "tracememo-local-api"},
     }
+
+
+def _load_cursors() -> dict[str, int]:
+    try:
+        data = json.loads(CURSOR_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): int(value) for key, value in data.items() if str(value).isdigit()}
+
+
+def _save_cursors(cursors: dict[str, int]) -> None:
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    tmp = CURSOR_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cursors, sort_keys=True), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(CURSOR_PATH)
+
+
+_collection_lock = threading.Lock()
 
 
 def collect_authorized_groups(config: dict[str, Any]) -> dict[str, Any]:
+    # The scheduler and manual scan share cursor/seen files in this process.
+    with _collection_lock:
+        return _collect_authorized_groups(config)
+
+
+def _collect_authorized_groups(config: dict[str, Any]) -> dict[str, Any]:
     status = probe_wechat()
-    return {
+    result = {
         "attempted": len(config.get("bindings") or []),
         "captured": 0,
         "uploaded": 0,
+        "duplicates": 0,
+        "failed": 0,
         "wechat": status,
-        "requires_calibration": bool((config.get("bindings") or []) and status.get("available")),
+        "requires_calibration": False,
+        "groups": [],
     }
+    if not config.get("enabled", True):
+        result["disabled"] = True
+        return result
+    if not status.get("available"):
+        return result
+    reader = TraceMemoReader(TRACEMEMO_TOKEN_FILE, TRACEMEMO_API_URL)
+    try:
+        chatrooms = reader.chatrooms()
+    except TraceMemoError as exc:
+        result["error"] = str(exc)
+        result["failed"] = result["attempted"]
+        return result
+    cursors = _load_cursors()
+    changed = False
+    initial_start = int(time.time()) - INITIAL_LOOKBACK_DAYS * 86400
+    for binding in config.get("bindings") or []:
+        group_result: dict[str, Any] = {"project_id": binding["project_id"], "group_name": binding["group_name"]}
+        result["groups"].append(group_result)
+        try:
+            room = resolve_bound_group(binding, chatrooms)
+            talker = str(room["m_nsUsrName"])
+            cursor_key = f"{binding['project_id']}:{talker}"
+            start = max(initial_start, cursors.get(cursor_key, initial_start) - CURSOR_OVERLAP_SECONDS)
+            messages = reader.messages(talker, start)
+            extracted = [item for raw in messages if (item := extract_message(raw, talker)) is not None]
+            extracted.sort(key=lambda item: item["create_time"])
+            counts = ingest_captured_messages(binding, extracted)
+            group_result.update(counts)
+            for key in ("captured", "uploaded", "duplicates", "failed"):
+                result[key] += counts[key]
+            if counts["failed"] == 0 and messages:
+                newest = max(int(raw.get("createTime") or 0) for raw in messages)
+                if newest > cursors.get(cursor_key, 0):
+                    cursors[cursor_key] = newest
+                    changed = True
+        except (TraceMemoError, ValueError, TypeError) as exc:
+            group_result["error"] = str(exc)
+            result["failed"] += 1
+    if changed:
+        _save_cursors(cursors)
+    return result
 
 
 def ingest_captured_messages(binding: dict[str, str], messages: list[dict[str, Any]]) -> dict[str, int]:
     seen_state = SeenState(SEEN_PATH)
     seen = seen_state.load()
-    captured = uploaded = duplicates = 0
+    captured = uploaded = duplicates = failed = 0
     for raw in messages:
         event = normalize_message(binding, raw)
         if event is None:
@@ -318,8 +396,10 @@ def ingest_captured_messages(binding: dict[str, str], messages: list[dict[str, A
         if upload_event(event):
             uploaded += 1
             seen.add(fingerprint)
+        else:
+            failed += 1
     seen_state.save(seen)
-    return {"captured": captured, "uploaded": uploaded, "duplicates": duplicates}
+    return {"captured": captured, "uploaded": uploaded, "duplicates": duplicates, "failed": failed}
 
 
 _last_slot: str | None = None

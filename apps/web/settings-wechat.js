@@ -51,9 +51,9 @@ function ensureWeChatSettingsCard() {
     '<label class="field"><span>微信群名称</span><input id="wechat-group-name" type="text" placeholder="填写微信中显示的完整群名" autocomplete="off" /></label>' +
     '<button id="wechat-add-btn" class="secondary-button align-bottom" type="button">添加绑定</button></div>' +
     '<div id="wechat-binding-list" class="wechat-binding-list"><div class="empty">尚未绑定微信群</div></div>' +
-    '<div class="wechat-note">宿主机助手只监听 127.0.0.1:6412。当前安全模式不会自动键入或点击微信；首次需在目标 Mac 校准只读 Accessibility 控件树后才启用自动读取。</div>' +
+    '<div class="wechat-note">宿主机助手只监听 127.0.0.1:6412，通过 TraceMemo 本地接口仅读取已绑定群的文本、引用和文件标题；不会操作微信界面，也不会上传媒体文件。</div>' +
     '<div class="settings-actions right-actions"><button id="wechat-refresh-btn" class="secondary-button" type="button">刷新状态</button>' +
-    '<button id="wechat-scan-btn" class="secondary-button" type="button">立即检查</button><button id="wechat-save-btn" class="primary-button" type="button">保存微信群绑定</button></div>' +
+    '<button id="wechat-scan-btn" class="secondary-button" type="button">立即采集</button><button id="wechat-save-btn" class="primary-button" type="button">保存微信群绑定</button></div>' +
     '<div id="wechat-message" class="inline-message"></div>';
 
   const localCard = Array.from(stack.children).find(function(item) { return item.querySelector && item.querySelector("#local-control-state"); });
@@ -119,11 +119,11 @@ async function loadWeChatConfig(showMessage) {
     renderWeChatBindings();
     const available = Boolean(health.wechat && health.wechat.available);
     const captureMode = health.wechat && health.wechat.capture_mode;
-    const captureReady = available && Boolean(captureMode) && captureMode !== "safe_adapter_required";
-    wechatEls.state.textContent = captureReady ? "微信采集就绪" : (available ? "微信运行中，采集待校准" : "助手在线，微信待授权");
+    const captureReady = available && captureMode === "tracememo_local_api";
+    wechatEls.state.textContent = captureReady ? "微信采集就绪" : "助手在线，微信数据源未就绪";
     wechatEls.state.className = "connection-state " + (captureReady ? "ok" : (available ? "" : "error"));
     if (showMessage) {
-      setWeChatMessage(captureReady ? "宿主机助手正常，定时计划与群绑定已加载。" : (available ? "群绑定已保存；当前版本仍需校准微信控件，尚未自动读取或上传消息。" : "宿主机助手已启动：" + ((health.wechat && health.wechat.reason) || "微信暂不可读取")), !available);
+      setWeChatMessage(captureReady ? "TraceMemo 本地接口已连接，已加载授权群绑定。" : "宿主机助手已启动：" + ((health.wechat && health.wechat.reason) || "微信暂不可读取"), !captureReady);
     }
   } catch (error) {
     wechatEls.state.textContent = "宿主机助手未连接";
@@ -164,11 +164,14 @@ wechatEls.save.addEventListener("click", async function() {
 
 wechatEls.refresh.addEventListener("click", function() { loadWeChatConfig(true); });
 wechatEls.scan.addEventListener("click", async function() {
-  setBusy(wechatEls.scan, true, "检查中...");
+  setBusy(wechatEls.scan, true, "采集中...");
   try {
     const result = await wechatApi("/api/v1/wechat/scan", {method:"POST"});
-    if (result.requires_calibration) setWeChatMessage("微信与辅助功能已可访问，但仍需在这台 Mac 上校准只读群聊控件树后才能自动采集。");
-    else setWeChatMessage((result.wechat && result.wechat.reason) || "本次检查完成。", !(result.wechat && result.wechat.available));
+    const groupErrors = (result.groups || []).filter(function(item) { return item.error; });
+    if (result.disabled) setWeChatMessage("定时采集已关闭。请先启用并保存。", true);
+    else if (!(result.wechat && result.wechat.available)) setWeChatMessage((result.wechat && result.wechat.reason) || "微信数据源不可用。", true);
+    else setWeChatMessage("已检查 " + result.attempted + " 个授权群，读取 " + result.captured + " 条；新增 " + result.uploaded + " 条，重复 " + result.duplicates + " 条，失败 " + result.failed + " 条。" +
+      (groupErrors.length ? " 未完成：" + groupErrors.map(function(item) { return item.group_name + "（" + item.error + "）"; }).join("；") : ""), Boolean(result.failed));
   } catch (error) {
     setWeChatMessage("检查失败：" + error.message, true);
   } finally {

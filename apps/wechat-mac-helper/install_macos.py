@@ -98,11 +98,8 @@ def main() -> int:
     print(f"Installed: {plist_path}")
     print("Local helper: http://127.0.0.1:6412/health")
     print("Schedule: local timezone, every 30 minutes from 09:00 through 20:00.")
-    print(
-        "Before enabling automatic WeChat reading, run the helper manually once from "
-        "Terminal and grant the required macOS Accessibility permission, then use the "
-        "read-only accessibility snapshot endpoint for calibration."
-    )
+    print("TraceMemo local API must be ready, with its Bearer token saved to the private state directory.")
+    print("Only explicitly bound group chats are read; no Accessibility permission is needed for the local API reader.")
     return 0
 
 

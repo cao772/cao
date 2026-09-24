@@ -1,6 +1,6 @@
 # Personal WeChat Project Collector (Mac)
 
-M7 V1 宿主机助手。它必须运行在 macOS 宿主机，而不是 Docker 中，因为微信界面读取需要 macOS Accessibility 权限。
+M7 宿主机助手。它通过 TraceMemo 的本地 HTTP API 增量读取明确绑定的微信群，并把项目沟通事件写入本机 Central。
 
 ## 已实现
 
@@ -9,16 +9,18 @@ M7 V1 宿主机助手。它必须运行在 macOS 宿主机，而不是 Docker �
 - 增量消息指纹与本机去重状态。
 - 规则优先抽取：需求、决定、变更、任务、问题/阻塞、时间节点、确认。
 - 向中央 /api/v1/conversation-events 上传结构化消息。
-- GET /health 检查微信运行状态和 Accessibility 基础可用性。
+- GET /health 检查 TraceMemo 本地数据库和 API Token 状态。
 - GET/PUT /api/v1/wechat/config 管理授权群和计划。
 - POST /api/v1/wechat/scan 手工触发。
 - GET /api/v1/wechat/accessibility-snapshot 手动读取前台微信控件树用于校准；默认 include_text=false，不返回 name/value 文本字段。
 
-## 安全边界
+## 接入与安全边界
 
-V1 不会自动键入群名、点击搜索结果或操作发送框。未经目标 Mac 的真实控件树校准就做 UI 导航，存在把文本输入聊天编辑框的风险。
+先在 Mac 上运行已连接微信本地数据库的 TraceMemo，并启用其 Local API。将 Bearer Token 存入 `~/Library/Application Support/AI Dev Management/tracememo-api-token`，文件权限设为 `0600`，目录权限设为 `0700`；也可用 `TRACEMEMO_TOKEN_FILE` 指向其他私有文件。TraceMemo 默认只监听 `127.0.0.1:6131`，本助手只监听 `127.0.0.1:6412`。
 
-因此当前分支先完成调度、授权、增量、中央存储和检索闭环，并提供微信/Accessibility 探测。首次在目标 Mac 上调用只读校准接口，确认控件角色后再启用群聊自动读取适配器。校准接口不会点击、聚焦、输入、滚动或修改微信状态。
+在平台配置中把业务项目与完整微信群名绑定。采集器要求群名唯一匹配，不模糊猜测，未绑定会话不会查询消息。首次回看 30 天，之后按游标增量读取并保留 24 小时重叠用于补录；本机和 Central 都按消息指纹去重。`POST /api/v1/wechat/scan` 可立即采集并返回各群计数。
+
+只上传文本、引用消息和文件标题；不上传图片、音视频、文件内容、媒体 URL 或完整微信数据库。匹配失败、TraceMemo 未就绪或上传失败时不会推进该群游标。Token 和聊天正文不写入采集日志。Accessibility 快照接口只用于手动只读诊断，不参与自动采集，也不会操作微信界面。
 
 ## 启动
 
@@ -38,7 +40,7 @@ V1 不会自动键入群名、点击搜索结果或操作发送框。未经目�
 
 ## 常驻运行
 
-先在终端手工启动一次，确认微信与辅助功能授权正常，再安装登录常驻：
+确认 TraceMemo 与本机 Central 就绪后，可安装登录常驻：
 
     export CENTRAL_URL=http://127.0.0.1:8080
     export COLLECTOR_TOKEN='与中央服务一致的 token'
@@ -51,4 +53,4 @@ V1 不会自动键入群名、点击搜索结果或操作发送框。未经目�
 
     python3 apps/wechat-mac-helper/uninstall_macos.py
 
-注意：LaunchAgent 运行身份仍需获得 macOS Accessibility 权限。正式启用自动读取前，先通过只读校准接口确认当前微信版本的控件结构。
+LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
