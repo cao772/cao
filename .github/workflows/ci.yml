@@ -32,8 +32,8 @@ jobs:
 
       - name: Run tests
         env:
-          PYTHONPATH: apps/local-sentinel:apps/server:apps/remote-collector
-        run: python -m pytest -q apps/local-sentinel/tests apps/server/tests apps/remote-collector/tests
+          PYTHONPATH: apps/local-sentinel:apps/server:apps/remote-collector:apps/wechat-mac-helper
+        run: python -m pytest -q apps/local-sentinel/tests apps/server/tests apps/remote-collector/tests apps/wechat-mac-helper/tests
 
       - name: Validate dashboard JavaScript
         run: |
@@ -44,7 +44,9 @@ jobs:
           node --check apps/web/settings-policy.js
           node --check apps/web/settings-model.js
           node --check apps/web/settings-nodes.js
+          node --check apps/web/settings-wechat.js
           node --check apps/web/project-intelligence.js
+          node --check apps/web/project-communications.js
 
       - name: Validate configs
         env:
@@ -77,12 +79,14 @@ jobs:
             for file in \
               index.html styles.css settings.css project-intelligence.css \
               app.js settings.js settings-projects.js settings-local-scope.js \
-              settings-policy.js settings-model.js settings-nodes.js \
-              project-intelligence.js; do
+              settings-policy.js settings-model.js settings-nodes.js settings-wechat.js \
+              project-intelligence.js project-communications.js; do
               test -s "$root/$file"
             done
             grep -q "/settings.css" "$root/index.html"
             grep -q "/settings-nodes.js" "$root/index.html"
+            grep -q "/settings-wechat.js" "$root/index.html"
             grep -q "/project-intelligence.css" "$root/index.html"
             grep -q "/project-intelligence.js" "$root/index.html"
+            grep -q "/project-communications.js" "$root/index.html"
           '

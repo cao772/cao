@@ -20,7 +20,7 @@
       </div>
 
       <div class="sidebar-section-title">项目</div>
-      <nav id="project-list" class="project-list"></nav>
+      <nav id="project-list" class="project-list"><div class="empty">正在加载项目…</div></nav>
 
       <div class="sidebar-section-title platform-title">平台</div>
       <button id="settings-nav" class="project-item settings-nav" type="button">
@@ -47,7 +47,7 @@
         </div>
       </header>
 
-      <section id="overview" class="overview-grid"></section>
+      <section id="overview" class="overview-grid"><div class="empty">正在加载项目概况…</div></section>
 
       <section class="content-grid">
         <div class="panel panel-wide task-panel">
@@ -58,7 +58,7 @@
             </div>
             <span id="task-scope" class="badge neutral">等待数据</span>
           </div>
-          <div id="task-table" class="table-wrap"></div>
+          <div id="task-table" class="table-wrap"><div class="empty">正在加载当前任务…</div></div>
         </div>
 
         <div class="panel">
@@ -68,7 +68,7 @@
               <p>以最新资料为主，历史记录保留在周度进展中</p>
             </div>
           </div>
-          <div id="project-memory" class="memory-block"></div>
+          <div id="project-memory" class="memory-block"><div class="empty">正在加载项目进展…</div></div>
         </div>
 
         <div class="panel">
@@ -78,7 +78,7 @@
               <p>汇总本机接入人员和项目仓库参与人员</p>
             </div>
           </div>
-          <div id="contributors" class="contributors"></div>
+          <div id="contributors" class="contributors"><div class="empty">正在加载人员协作…</div></div>
         </div>
 
         <div class="panel panel-wide">
@@ -89,7 +89,7 @@
             </div>
             <span id="timeline-count" class="badge neutral">0 周</span>
           </div>
-          <div id="timeline" class="timeline"></div>
+          <div id="timeline" class="timeline"><div class="empty">正在加载每周进展…</div></div>
         </div>
       </section>
     </main>
@@ -111,8 +111,8 @@
         <div class="panel intelligence-search-card">
           <div class="intelligence-search-row">
             <label class="intelligence-search-box">
-              <span>搜索项目材料</span>
-              <input id="intelligence-search-input" type="search" placeholder="输入文件名、编号、金额、功能名称、合同条款或正文关键词" autocomplete="off" />
+              <span>搜索项目材料与沟通</span>
+              <input id="intelligence-search-input" type="search" placeholder="输入文件名、编号、金额、功能名称、合同条款、微信群内容或业务决定" autocomplete="off" />
             </label>
             <label class="intelligence-filter">
               <span>材料类型</span>
@@ -393,8 +393,10 @@
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
   <script src="/settings-policy.js"></script>
-  <script src="/settings-model.js"></script>
+  <script src="/settings-model.js?v=m7-tracememo-1"></script>
   <script src="/settings-nodes.js"></script>
+  <script src="/settings-wechat.js?v=m7-tracememo-1"></script>
   <script src="/project-intelligence.js"></script>
+  <script src="/project-communications.js"></script>
 </body>
 </html>

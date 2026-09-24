@@ -11,7 +11,9 @@ COPY apps/web/settings-local-scope.js /usr/share/nginx/html/settings-local-scope
 COPY apps/web/settings-policy.js /usr/share/nginx/html/settings-policy.js
 COPY apps/web/settings-model.js /usr/share/nginx/html/settings-model.js
 COPY apps/web/settings-nodes.js /usr/share/nginx/html/settings-nodes.js
+COPY apps/web/settings-wechat.js /usr/share/nginx/html/settings-wechat.js
 COPY apps/web/project-intelligence.js /usr/share/nginx/html/project-intelligence.js
+COPY apps/web/project-communications.js /usr/share/nginx/html/project-communications.js
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
