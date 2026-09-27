@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -119,6 +120,29 @@ class CommandGatewayTests(unittest.TestCase):
             self.assertEqual(gateway.deliver_pending(self.conn, "test-token"), 0)
             request.assert_called_once()
         self.assertEqual(self.conn.execute("SELECT status FROM commands").fetchone()[0], "send_requested")
+
+    def test_bot_reply_uses_fixed_recipient_and_deduplicates(self):
+        binding = Path(self.temp.name) / "recipient.json"
+        binding.write_text(json.dumps({"userId": "owner@im.wechat", "accountId": "bot@im.bot"}))
+        self.conn.execute(
+            "INSERT INTO commands(message_id,created_at,command,status,reply) "
+            "VALUES('1',1000,'/状态','awaiting_send','正常')"
+        )
+        self.conn.commit()
+
+        def request(url, *, token=None, body=None):
+            if url.endswith("/status"):
+                return {"hub": "online", "connector": "online", "accountId": "bot@im.bot"}
+            self.assertEqual(body["to"], "owner@im.wechat")
+            return {"success": True, "status": "sent"}
+
+        with patch.object(gateway, "BOT_RECIPIENT_FILE", binding), patch.object(gateway, "_json_request", side_effect=request) as send:
+            recipient = gateway.bot_recipient("token")
+            self.assertEqual(recipient, "owner@im.wechat")
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", recipient), 1)
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", recipient), 0)
+            self.assertEqual(send.call_count, 2)
+        self.assertEqual(self.conn.execute("SELECT status FROM commands").fetchone()[0], "sent_bot")
 
 
 if __name__ == "__main__":

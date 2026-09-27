@@ -68,7 +68,7 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
     /问 低电压项目现在的主要风险是什么？
     /执行 检查本机研发平台并修复故障
 
-`/问` 从本机 Central 获取相关项目事实，并用已授权的 DeepSeek `deepseek-flash` 回答；只发送选中项目简报与当前问题，不上传整库或其他微信聊天。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在个人微信发送能力就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
+`/问` 从本机 Central 获取相关项目事实，并用已授权的 DeepSeek `deepseek-flash` 回答；只发送选中项目简报与当前问题，不上传整库或其他微信聊天。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在已验证的回信通道就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
 
 安装登录常驻：
 
@@ -82,4 +82,4 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
 
     python3 apps/wechat-mac-helper/uninstall_command_gateway.py
 
-回复仅走 TraceMemo 的**个人微信**发送能力；不会借用独立机器人账号。发送能力未就绪时，结果保存在本机私有队列，不会声称已回复到微信。当前 TraceMemo 个人发送依赖 OneBot 和相容的微信版本，部署前应实际核验 `/api/v1/wechat-personal/send-capability`。
+收件入口是你自己账号的「文件传输助手」。回复优先通过 TraceMemo Agent Hub 已验证的**测试私聊**发给你；接收者在 `~/Library/Application Support/AI Dev Management/wechat-command-recipient.json` 中固定绑定（`0600`），不会跟随 Agent Hub 的“最后发消息的人”变化。Agent Hub 不在线时，若个人微信发送能力已就绪才走个人账号发送；两者都不可用时保留本机待发队列。当前微信 4.1.13 的个人发送仍不可用，但测试私聊已经实际发通。项目群不会收到这些指令回复。

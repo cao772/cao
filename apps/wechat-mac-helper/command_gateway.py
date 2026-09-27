@@ -1,8 +1,8 @@
-"""Receive owner-only WeChat commands through TraceMemo's local database reader.
+"""Receive owner-only WeChat commands and return results to a bound test chat.
 
 The only input conversation is the current account's File Transfer Assistant.
-Replies are held locally until the *personal* WeChat sender is ready; the
-separate TraceMemo robot account is never used as a substitute.
+Replies go to the explicitly bound Agent Hub private chat when its connector is
+online, or to the personal sender when it becomes available.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ STATE_ROOT = Path.home() / "Library/Application Support/AI Dev Management"
 TOKEN_FILE = STATE_ROOT / "tracememo-api-token"
 DATABASE = STATE_ROOT / "wechat-command-gateway.sqlite3"
 DEEPSEEK_KEY_FILE = STATE_ROOT / "deepseek-api-key"
+BOT_RECIPIENT_FILE = STATE_ROOT / "wechat-command-recipient.json"
 TRACE_MEMO = "http://127.0.0.1:6131"
 CENTRAL = "http://127.0.0.1:8080"
 ONEBOT = "http://127.0.0.1:58080"
@@ -350,6 +351,55 @@ def personal_sender_ready(token: str) -> bool:
     return isinstance(result, dict) and bool((result.get("capability") or {}).get("ready")) and bool(((result.get("capability") or {}).get("capabilities") or {}).get("text"))
 
 
+def bot_recipient(token: str) -> str | None:
+    """Use only the owner chat bound after a verified inbound test."""
+    if not BOT_RECIPIENT_FILE.is_file():
+        return None
+    binding = json.loads(BOT_RECIPIENT_FILE.read_text(encoding="utf-8"))
+    if not isinstance(binding, dict):
+        return None
+    user_id = str(binding.get("userId") or "")
+    account_id = str(binding.get("accountId") or "")
+    if not user_id.endswith("@im.wechat") or not account_id.endswith("@im.bot"):
+        return None
+    status = _json_request(f"{TRACE_MEMO}/api/v1/agent/status", token=token)
+    if not isinstance(status, dict) or status.get("hub") != "online" or status.get("connector") != "online" or status.get("accountId") != account_id:
+        return None
+    return user_id
+
+
+def deliver_pending_bot(conn: sqlite3.Connection, token: str, recipient: str) -> int:
+    rows = conn.execute(
+        "SELECT message_id,reply FROM commands WHERE status='awaiting_send' ORDER BY created_at,message_id"
+    ).fetchall()
+    sent = 0
+    for row in rows:
+        claimed = conn.execute(
+            "UPDATE commands SET status='bot_requested',delivered_at=? "
+            "WHERE message_id=? AND status='awaiting_send'",
+            (int(time.time()), row["message_id"]),
+        )
+        conn.commit()
+        if claimed.rowcount != 1:
+            continue
+        result = _json_request(
+            f"{TRACE_MEMO}/api/v1/agent/send",
+            token=token,
+            body={"to": recipient, "text": PREFIX + "\n" + str(row["reply"] or "")[:1800]},
+        )
+        if not isinstance(result, dict) or result.get("success") is not True or result.get("status") != "sent":
+            conn.execute(
+                "UPDATE commands SET status='bot_failed',error='agent_hub_rejected' WHERE message_id=?",
+                (row["message_id"],),
+            )
+            conn.commit()
+            break
+        conn.execute("UPDATE commands SET status='sent_bot',delivered_at=? WHERE message_id=?", (int(time.time()), row["message_id"]))
+        conn.commit()
+        sent += 1
+    return sent
+
+
 def deliver_pending(conn: sqlite3.Connection, token: str) -> int:
     rows = conn.execute("SELECT message_id,reply FROM commands WHERE status='awaiting_send' ORDER BY created_at,message_id").fetchall()
     if not rows or not personal_sender_ready(token):
@@ -410,17 +460,27 @@ def run_once(conn: sqlite3.Connection) -> dict[str, int]:
     added = ingest(conn, reader)
     token = TOKEN_FILE.read_text(encoding="utf-8").strip()
     try:
-        ready = personal_sender_ready(token)
+        personal_ready = personal_sender_ready(token)
     except (OSError, urllib.error.URLError, ValueError):
-        ready = False
-    processed = process_pending(conn, sender_ready=ready)
+        personal_ready = False
     try:
-        accepted = deliver_pending(conn, token)
+        recipient = bot_recipient(token)
+    except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+        recipient = None
+    processed = process_pending(conn, sender_ready=bool(recipient) or personal_ready)
+    try:
+        if recipient:
+            bot_sent = deliver_pending_bot(conn, token, recipient)
+            accepted = 0
+        else:
+            bot_sent = 0
+            accepted = deliver_pending(conn, token) if personal_ready else 0
     except (OSError, urllib.error.URLError, ValueError):
+        bot_sent = 0
         accepted = 0
     sent = confirm_sent(conn, reader)
     waiting = conn.execute("SELECT COUNT(*) FROM commands WHERE status='awaiting_send'").fetchone()[0]
-    return {"received": added, "processed": processed, "send_accepted": accepted, "sent": sent, "awaiting_personal_sender": waiting}
+    return {"received": added, "processed": processed, "bot_sent": bot_sent, "send_accepted": accepted, "sent": sent, "awaiting_sender": waiting}
 
 
 def main() -> int:
