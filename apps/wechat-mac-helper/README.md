@@ -54,3 +54,32 @@ M7 宿主机助手。它通过 TraceMemo 的本地 HTTP API 增量读取明确�
     python3 apps/wechat-mac-helper/uninstall_macos.py
 
 LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
+
+## 个人微信指令入口（文件传输助手）
+
+`command_gateway.py` 只读取当前账号发往「文件传输助手」的普通文本命令，按 TraceMemo 消息 ID 去重。它不会读取其他私聊或群聊作为指令。可发送：
+
+    /项目 列表
+    /项目 低电压
+    /项目 缺陷 问题
+    /项目 hy-claw 下一步
+    /项目 hy-claw 搜索 关键词
+    /状态
+    /问 低电压项目现在的主要风险是什么？
+    /执行 检查本机研发平台并修复故障
+
+`/问` 从本机 Central 获取相关项目事实，并用已授权的 DeepSeek `deepseek-flash` 回答；只发送选中项目简报与当前问题，不上传整库或其他微信聊天。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在个人微信发送能力就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
+
+安装登录常驻：
+
+    python3 apps/wechat-mac-helper/install_command_gateway.py
+
+查看本机队列状态：
+
+    python3 apps/wechat-mac-helper/command_gateway.py --status
+
+停止常驻而保留队列：
+
+    python3 apps/wechat-mac-helper/uninstall_command_gateway.py
+
+回复仅走 TraceMemo 的**个人微信**发送能力；不会借用独立机器人账号。发送能力未就绪时，结果保存在本机私有队列，不会声称已回复到微信。当前 TraceMemo 个人发送依赖 OneBot 和相容的微信版本，部署前应实际核验 `/api/v1/wechat-personal/send-capability`。
