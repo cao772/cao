@@ -38,6 +38,21 @@ class CommandGatewayTests(unittest.TestCase):
         self.conn.close()
         self.temp.cleanup()
 
+    def test_owner_can_search_across_projects_with_source(self):
+        self.assertTrue(gateway.accept_message({"isSender": True, "type": "普通文本", "content": "/搜索 框架"}))
+        self.assertFalse(gateway.accept_message({"isSender": False, "type": "普通文本", "content": "/搜索 框架"}))
+        payload = {"count": 1, "conversation_available": True, "results": [{
+            "project_id": "hy-claw", "project_name": "HY Claw", "source_type": "material",
+            "source_name": "项目概览.md", "source_path": "management/项目概览.md",
+            "source_time": "2026-09-24T00:00:00Z", "snippet": "框架分支为 ts-dev",
+        }]}
+        with patch.object(gateway, "_json_request", return_value=payload) as request:
+            reply = gateway.execute("/搜索 框架")
+        self.assertIn("HY Claw", reply)
+        self.assertIn("management/项目概览.md", reply)
+        request.assert_called_once()
+        self.assertIn("/api/v1/search?", request.call_args.args[0])
+
     def test_only_own_command_is_ingested_once(self):
         messages = [
             {"serverId": "1", "createTime": 1000, "content": "/项目 列表", "type": "普通文本", "isSender": True},

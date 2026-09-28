@@ -99,7 +99,7 @@ def accept_message(message: dict[str, Any]) -> bool:
         message.get("isSender") is True
         and message.get("type") == "普通文本"
         and (text == "/项目" or text.startswith("/项目 ")
-             or text.startswith(("/问 ", "/执行 "))
+             or text.startswith(("/问 ", "/执行 ", "/搜索 "))
              or text in {"/状态", "/帮助"})
         and len(text) <= 2000
     )
@@ -247,6 +247,35 @@ def _search_reply(name: str, result: dict[str, Any]) -> str:
     if len(lines) == 1:
         lines.append("暂无匹配资料或沟通记录。")
     return "\n".join(lines)[:1700]
+
+
+def global_search_command(command: str) -> str:
+    query = command[len("/搜索 "):].strip()
+    if not query:
+        return "请在 /搜索 后输入关键词。"
+    result = _json_request(f"{CENTRAL}/api/v1/search?" + urllib.parse.urlencode({"q": query, "limit": 6}))
+    if not isinstance(result, dict) or not isinstance(result.get("results"), list):
+        raise ValueError("跨项目搜索结果格式错误")
+    lines = [f"跨项目搜索“{_short(query, 50)}”：找到 {result.get('count', 0)} 项"]
+    for item in result["results"][:6]:
+        if not isinstance(item, dict):
+            continue
+        name = _short(item.get("project_name") or item.get("project_id"), 35)
+        kind = "沟通" if item.get("source_type") == "conversation" else "资料"
+        origin = _short(item.get("source_name") or item.get("source_path"), 60)
+        date = str(item.get("source_time") or "")[:10]
+        lines.append(f"• {name}｜{kind}｜{origin}{' · ' + date if date else ''}")
+        snippet = _short(item.get("snippet"), 95)
+        if snippet:
+            lines.append("  " + snippet)
+        path = _short(item.get("source_path"), 110)
+        if path:
+            lines.append("  来源：" + path)
+    if len(lines) == 1:
+        lines.append("没有匹配内容。")
+    if result.get("conversation_available") is False:
+        lines.append("此部署尚未接入授权沟通记录。")
+    return _mobile_reply("\n".join(lines), 1700)
 
 
 def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
@@ -540,6 +569,8 @@ def status_command() -> str:
 def execute(command: str) -> str:
     if command.startswith("/项目"):
         return project_command(command)
+    if command.startswith("/搜索 "):
+        return global_search_command(command)
     if command.startswith("/问 "):
         return project_question(command)
     if command.startswith("/执行 "):
@@ -550,7 +581,7 @@ def execute(command: str) -> str:
         return ("请在你自己微信的「文件传输助手」发送指令，结果会回到当前测试私聊：\n"
                 "/项目 列表\n/项目 缺陷 背景\n/项目 低电压 材料\n"
                 "/项目 HY CLAW 进度\n/项目 hy-claw 仓库\n/项目 缺陷 搜索 关键词\n"
-                "/问 HY CLAW 现在做到哪了？\n/状态\n/执行 具体任务\n"
+                "/搜索 框架\n/问 HY CLAW 现在做到哪了？\n/状态\n/执行 具体任务\n"
                 "当前这个 TraceMemo 机器人自身的聊天问答与项目指令入口尚未打通。")
     return "未识别命令。"
 
