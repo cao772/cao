@@ -12,6 +12,8 @@ const intelligenceEls = {
   subtitle: document.getElementById('intelligence-subtitle'),
   status: document.getElementById('intelligence-status'),
   summary: document.getElementById('intelligence-summary'),
+  dossier: document.getElementById('intelligence-dossier'),
+  dossierSettings: document.getElementById('dossier-settings-btn'),
   context: document.getElementById('intelligence-context'),
   progress: document.getElementById('intelligence-progress'),
   repositories: document.getElementById('intelligence-repositories'),
@@ -72,6 +74,100 @@ function intelligencePills(items, key = 'fact', limit = 8) {
   )).join('')}</div>`;
 }
 
+function dossierDate(value) {
+  if (!value) return '时间未知';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '时间未知';
+  return date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function dossierAgeDays(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : Math.max(0, Math.floor((Date.now() - date.getTime()) / 86400000));
+}
+
+function dossierSourceLink(source) {
+  if (!source) return '未标原始链接';
+  try {
+    const url = new URL(source);
+    if (url.protocol === 'https:' || url.protocol === 'http:') {
+      return `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">查看来源（${escapeHtml(url.hostname)}）</a>`;
+    }
+  } catch (_error) {
+    // Local paths are displayed as text; browsers cannot safely open host files.
+  }
+  return escapeHtml(source);
+}
+
+function dossierFacts(data) {
+  const facts = [];
+  const seen = new Set();
+  const add = item => {
+    const text = String(item.text || '').replace(/^\s*[-*•]\s*/, '').trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    facts.push({ ...item, text });
+  };
+  for (const fact of data.context?.known_facts || []) {
+    add({ text: intelligenceListText(fact), source: fact.source, date: data.context?.generated_at, observed: data.profile?.observed_at, label: '项目认知记录' });
+  }
+  const materials = [...(data.materials || [])]
+    .filter(item => !['historical', 'period_history'].includes(item.version_status))
+    .sort((a, b) => String(b.modified_at || '').localeCompare(String(a.modified_at || '')));
+  for (const material of materials) {
+    for (const fact of (material.facts || []).slice(0, 2)) {
+      add({ text: intelligenceListText(fact, 'text'), source: material.path, date: material.modified_at, observed: material.observed_at, label: '材料摘录' });
+    }
+    if (facts.length >= 8) break;
+  }
+  return facts.slice(0, 5);
+}
+
+function renderDossier(data) {
+  const profile = data.profile || {};
+  const context = data.context || {};
+  const project = context.project || {};
+  const progress = data.progress || {};
+  const sourceDate = context.available && project.current_stage
+    ? context.modified_at || context.generated_at
+    : progress.source_status?.freshness_reference_date;
+  const sourceAge = dossierAgeDays(sourceDate);
+  const stage = project.current_stage || progress.current_stage || '尚未识别';
+  const progressStage = progress.current_stage;
+  const stageSource = project.current_stage ? '项目认知文件' : '项目资料自动汇总，尚未关联逐条依据';
+  const purpose = project.purpose || profile.description || '尚未登记项目背景';
+  const purposeSource = project.purpose
+    ? `项目认知文件 · 更新 ${dossierDate(context.modified_at || context.generated_at)} · 本地采集 ${dossierDate(profile.observed_at)}`
+    : `本地项目登记 · 采集 ${dossierDate(profile.observed_at)} · 未标原始资料日期`;
+  const nextFromContext = (context.current_work || [])[0];
+  const next = String(nextFromContext || (progress.next_steps || [])[0] || '尚未识别明确下一步').replace(/^\s*[-*•]\s*/, '');
+  const facts = dossierFacts(data);
+  const materials = [...(data.materials || [])]
+    .filter(item => !['historical', 'period_history'].includes(item.version_status))
+    .sort((a, b) => String(b.modified_at || '').localeCompare(String(a.modified_at || '')))
+    .slice(0, 4);
+  intelligenceEls.dossier.innerHTML = `
+    <div class="dossier-summary">
+      <div class="dossier-field"><div class="dossier-field-label">项目背景</div><div class="dossier-field-value">${escapeHtml(purpose)}</div><div class="dossier-field-source">${escapeHtml(purposeSource)}</div></div>
+      <div class="dossier-field"><div class="dossier-field-label">资料中的当前阶段</div><div class="dossier-field-value strong">${escapeHtml(stage)}</div>
+        <div class="dossier-field-source${sourceAge === null || sourceAge > 14 ? ' warn' : ''}">${escapeHtml(stageSource)} · 资料日期 ${escapeHtml(dossierDate(sourceDate))} · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}${sourceAge > 14 ? ` · 距今 ${sourceAge} 天，需核对` : ''}</div>
+        ${project.current_stage && progressStage && project.current_stage !== progressStage ? `<div class="dossier-stage-note">自动资料汇总另显示“${escapeHtml(progressStage)}”；两种判断尚未核对一致。</div>` : ''}
+      </div>
+      <div class="dossier-field"><div class="dossier-field-label">下一步</div><div class="dossier-field-value">${escapeHtml(next)}</div><div class="dossier-field-source">${escapeHtml(nextFromContext ? '项目认知记录' : '项目资料自动汇总')} · 参考日期 ${escapeHtml(dossierDate(sourceDate))} · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}</div></div>
+      <div class="dossier-field"><div class="dossier-field-label">登记负责人</div><div class="dossier-field-value">${escapeHtml(profile.owner || '未登记')}</div><div class="dossier-field-source">项目档案 · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}；已关联 ${profile.repositories?.length || 0} 个仓库</div></div>
+    </div>
+    <div class="dossier-subgrid">
+      <div class="dossier-section"><h4>可追溯的事实摘录</h4><p class="dossier-section-note">记录原始链接或材料路径。摘录不等于已完成验收。</p>
+        ${facts.length ? facts.map(item => `<div class="dossier-fact"><div class="dossier-fact-text">${escapeHtml(item.text)}</div><div class="dossier-fact-meta">${escapeHtml(item.label)} · ${dossierSourceLink(item.source)} · 资料日期 ${escapeHtml(dossierDate(item.date))} · 本地采集 ${escapeHtml(dossierDate(item.observed))}</div></div>`).join('') : '<div class="intelligence-empty compact-empty">暂无可逐条追溯的事实；先核对项目资料和绑定。</div>'}
+      </div>
+      <div class="dossier-section"><h4>最近的项目材料</h4><p class="dossier-section-note">材料修改日期与本机采集日期分开显示；路径可复制。</p>
+        ${materials.length ? materials.map(item => `<div class="dossier-material"><div class="dossier-material-head"><strong>${escapeHtml(item.name || item.path || '未命名材料')}</strong><span class="badge ${intelligenceStatusTone(item.version_status)}">${escapeHtml(intelligenceStatusLabel(item.version_status))}</span></div><div class="dossier-material-meta">${escapeHtml(item.material_type_label || '其他资料')} · 修改 ${escapeHtml(dossierDate(item.modified_at))} · 采集 ${escapeHtml(dossierDate(item.observed_at))}</div><div class="dossier-material-meta">${escapeHtml(item.path || '')}</div><button class="dossier-copy" type="button" data-dossier-copy="${escapeHtml(item.path || '')}">复制材料路径</button></div>`).join('') : '<div class="intelligence-empty compact-empty">尚未采集到项目材料。</div>'}
+      </div>
+    </div>`;
+}
+
 function showIntelligenceView() {
   if (!state.selectedProjectId) {
     showToast('请先选择一个项目', true);
@@ -80,7 +176,9 @@ function showIntelligenceView() {
   document.getElementById('settings-view')?.classList.add('hidden');
   document.getElementById('dashboard-view')?.classList.add('hidden');
   intelligenceEls.view?.classList.remove('hidden');
-  loadProjectIntelligence(state.selectedProjectId).catch(error => {
+  const projectId = state.selectedProjectId;
+  loadProjectIntelligence(projectId).catch(error => {
+    if (intelligenceState.projectId !== projectId) return;
     intelligenceEls.status.textContent = '加载失败';
     intelligenceEls.status.className = 'badge bad';
     showToast(`项目认知加载失败：${error.message}`, true);
@@ -323,8 +421,11 @@ async function loadProjectIntelligence(projectId) {
   intelligenceEls.subtitle.textContent = '理解项目材料、版本关系、最近变化，并直接搜索文件内容中的关键信息';
   intelligenceEls.status.textContent = '加载中';
   intelligenceEls.status.className = 'badge neutral';
+  intelligenceEls.dossier.innerHTML = '<div class="intelligence-empty">正在读取项目依据…</div>';
   const data = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/intelligence`);
+  if (intelligenceState.projectId !== projectId) return;
   intelligenceState.data = data;
+  renderDossier(data);
   renderIntelligenceSummary(data);
   renderProgress(data);
   renderRepositories(data);
@@ -343,6 +444,17 @@ async function loadProjectIntelligence(projectId) {
 
 intelligenceEls.open?.addEventListener('click', showIntelligenceView);
 intelligenceEls.back?.addEventListener('click', hideIntelligenceView);
+intelligenceEls.dossierSettings?.addEventListener('click', () => showSettings(intelligenceState.projectId));
+intelligenceEls.dossier?.addEventListener('click', async event => {
+  const button = event.target.closest?.('[data-dossier-copy]');
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText(button.dataset.dossierCopy || '');
+    showToast('材料路径已复制');
+  } catch (_error) {
+    showToast('浏览器未允许复制，请手动复制路径', true);
+  }
+});
 intelligenceEls.searchButton?.addEventListener('click', runIntelligenceSearch);
 intelligenceEls.searchInput?.addEventListener('keydown', event => {
   if (event.key === 'Enter') runIntelligenceSearch();
