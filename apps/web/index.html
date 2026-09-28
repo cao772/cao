@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
   <link rel="stylesheet" href="/project-intelligence.css?v=p1-evidence-2" />
-  <link rel="stylesheet" href="/portfolio.css" />
+  <link rel="stylesheet" href="/portfolio.css?v=p2-global-search-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -49,6 +49,17 @@
         <button id="portfolio-refresh-btn" class="secondary-button" type="button">刷新数据</button>
       </header>
       <section id="portfolio-overview" class="portfolio-overview" aria-label="项目组合概况"></section>
+      <section class="portfolio-global-search" aria-label="跨项目检索">
+        <div class="portfolio-search-heading"><h3>跨项目查资料与沟通</h3><p>结果保留项目、原始来源及时间；仅搜索已采集和授权的内容。</p></div>
+        <div class="portfolio-search-controls">
+          <label><span>关键词</span><input id="global-search-input" type="search" placeholder="例如：费用、验收、框架、关键决定" autocomplete="off" /></label>
+          <label><span>项目</span><select id="global-search-project"><option value="">全部项目</option></select></label>
+          <label><span>来源</span><select id="global-search-source"><option value="all">全部来源</option><option value="material">项目材料</option><option value="conversation">授权沟通</option></select></label>
+          <button id="global-search-btn" class="primary-button" type="button">搜索</button>
+        </div>
+        <div id="global-search-status" class="portfolio-search-status" role="status" aria-live="polite">输入关键词开始检索。</div>
+        <div id="global-search-results" class="portfolio-search-results"></div>
+      </section>
       <div class="portfolio-toolbar">
         <div>
           <h3>项目目录</h3>
@@ -424,7 +435,7 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=p2-global-search-1"></script>
   <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>

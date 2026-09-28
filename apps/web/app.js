@@ -1,4 +1,4 @@
-const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0 };
+const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, globalSearchLoadId: 0 };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -22,6 +22,12 @@ const els = {
   portfolioStatus: document.getElementById('portfolio-status'),
   portfolioSearch: document.getElementById('portfolio-search'),
   portfolioRefresh: document.getElementById('portfolio-refresh-btn'),
+  globalSearchInput: document.getElementById('global-search-input'),
+  globalSearchProject: document.getElementById('global-search-project'),
+  globalSearchSource: document.getElementById('global-search-source'),
+  globalSearchButton: document.getElementById('global-search-btn'),
+  globalSearchStatus: document.getElementById('global-search-status'),
+  globalSearchResults: document.getElementById('global-search-results'),
 };
 
 async function api(path) {
@@ -206,11 +212,60 @@ function showPortfolio() {
   document.getElementById('intelligence-view')?.classList.add('hidden');
   document.getElementById('dashboard-view')?.classList.add('hidden');
   els.portfolioView.classList.remove('hidden');
+  const selectedSearchProject = els.globalSearchProject.value;
+  els.globalSearchProject.innerHTML = '<option value="">全部项目</option>' + state.projects.map(project => `<option value="${escapeHtml(project.project_id)}">${escapeHtml(project.project_name || project.project_id)}</option>`).join('');
+  if (state.projects.some(project => project.project_id === selectedSearchProject)) els.globalSearchProject.value = selectedSearchProject;
   return loadPortfolio().catch(error => {
     els.portfolioStatus.textContent = '项目概况读取失败';
     els.portfolioGrid.innerHTML = '<div class="portfolio-empty">读取失败，请点击“刷新数据”重试。</div>';
     showToast(`读取项目总览失败：${error.message}`, true);
   });
+}
+
+function renderGlobalSearchResults(payload) {
+  const results = payload.results || [];
+  const unavailable = payload.unavailable_projects || [];
+  els.globalSearchStatus.textContent = `找到 ${payload.count || 0} 项${results.length < (payload.count || 0) ? `，显示前 ${results.length} 项` : ''}。${payload.conversation_available === false ? ' 授权沟通尚未接入此部署。' : ''}${unavailable.length ? ` ${unavailable.length} 个项目暂时无法检索。` : ''}`;
+  els.globalSearchResults.innerHTML = results.length ? results.map((item, index) => `
+    <article class="portfolio-search-hit">
+      <strong>${escapeHtml(item.project_name)} · ${escapeHtml(item.source_name || '未命名来源')}</strong>
+      ${item.snippet ? `<p>${escapeHtml(item.snippet)}</p>` : ''}
+      <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
+      <button type="button" data-global-search-open="${index}">在项目中查看</button>
+    </article>`).join('') : '<div class="portfolio-empty">没有找到匹配内容。试试项目名、文件名或更短的业务关键词。</div>';
+  els.globalSearchResults.querySelectorAll('[data-global-search-open]').forEach(button => button.addEventListener('click', async () => {
+    const item = results[Number(button.dataset.globalSearchOpen)];
+    if (!item) return;
+    await selectProject(item.project_id);
+    await showIntelligenceView();
+    const searchInput = document.getElementById('intelligence-search-input');
+    if (searchInput) searchInput.value = payload.query;
+    await runIntelligenceSearch();
+  }));
+}
+
+async function runGlobalSearch() {
+  const query = els.globalSearchInput.value.trim();
+  if (!query) {
+    els.globalSearchStatus.textContent = '请输入关键词。';
+    return;
+  }
+  const requestId = ++state.globalSearchLoadId;
+  els.globalSearchButton.disabled = true;
+  els.globalSearchStatus.textContent = '正在检索已采集的项目材料与授权沟通…';
+  const params = new URLSearchParams({ q: query, source: els.globalSearchSource.value, limit: '30' });
+  if (els.globalSearchProject.value) params.set('project_id', els.globalSearchProject.value);
+  try {
+    const payload = await api(`/api/v1/search?${params}`);
+    if (requestId === state.globalSearchLoadId) renderGlobalSearchResults(payload);
+  } catch (error) {
+    if (requestId === state.globalSearchLoadId) {
+      els.globalSearchStatus.textContent = `检索失败：${error.message}`;
+      els.globalSearchResults.innerHTML = '';
+    }
+  } finally {
+    if (requestId === state.globalSearchLoadId) els.globalSearchButton.disabled = false;
+  }
 }
 
 function metric(label, value, note = '', small = false) {
@@ -642,6 +697,8 @@ els.portfolioNav.addEventListener('click', () => {
   showPortfolio();
 });
 els.portfolioSearch.addEventListener('input', renderPortfolio);
+els.globalSearchButton.addEventListener('click', runGlobalSearch);
+els.globalSearchInput.addEventListener('keydown', event => { if (event.key === 'Enter') runGlobalSearch(); });
 els.portfolioRefresh.addEventListener('click', async () => {
   els.portfolioRefresh.disabled = true;
   try {
