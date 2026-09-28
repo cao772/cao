@@ -105,7 +105,7 @@ function setBusy(button, busy, busyText = '处理中...') {
   }
 }
 
-function showSettings() {
+function showSettings(projectId = null) {
   settingsEls.dashboard.classList.add('hidden');
   document.getElementById('portfolio-view')?.classList.add('hidden');
   document.getElementById('intelligence-view')?.classList.add('hidden');
@@ -113,7 +113,14 @@ function showSettings() {
   settingsEls.view.classList.remove('hidden');
   settingsEls.nav.classList.add('active');
   document.querySelectorAll('.project-item[data-project-id]').forEach(item => item.classList.remove('active'));
-  loadSettings().catch(error => {
+  return loadSettings().then(() => {
+    if (typeof projectId !== 'string' || !settingsState.projects.some(item => item.project_id === projectId)) return;
+    settingsEls.bindingProject.value = projectId;
+    settingsEls.localProject.value = projectId;
+    renderGitLabProjects();
+    settingsEls.bindingProject.scrollIntoView({ block: 'center' });
+    settingsEls.bindingProject.focus();
+  }).catch(error => {
     settingsEls.status.textContent = '加载失败';
     settingsEls.status.className = 'badge bad';
     setInlineMessage(settingsEls.gitlabMessage, `配置加载失败：${error.message}`, true);
@@ -437,7 +444,7 @@ async function loadSettings() {
   settingsEls.status.className = 'badge good';
 }
 
-settingsEls.nav?.addEventListener('click', showSettings);
+settingsEls.nav?.addEventListener('click', () => showSettings());
 document.addEventListener('click', event => {
   if (event.target.closest?.('[data-project-id]')) showDashboard();
 });
