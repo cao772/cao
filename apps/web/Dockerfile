@@ -4,6 +4,7 @@ COPY apps/web/index.html /usr/share/nginx/html/index.html
 COPY apps/web/styles.css /usr/share/nginx/html/styles.css
 COPY apps/web/settings.css /usr/share/nginx/html/settings.css
 COPY apps/web/project-intelligence.css /usr/share/nginx/html/project-intelligence.css
+COPY apps/web/portfolio.css /usr/share/nginx/html/portfolio.css
 COPY apps/web/app.js /usr/share/nginx/html/app.js
 COPY apps/web/settings.js /usr/share/nginx/html/settings.js
 COPY apps/web/settings-projects.js /usr/share/nginx/html/settings-projects.js
