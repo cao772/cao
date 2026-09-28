@@ -6,7 +6,7 @@
   <title>AI 研发协同管理平台</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
-  <link rel="stylesheet" href="/project-intelligence.css" />
+  <link rel="stylesheet" href="/project-intelligence.css?v=p1-dossier-1" />
   <link rel="stylesheet" href="/portfolio.css" />
 </head>
 <body>
@@ -136,6 +136,14 @@
       </header>
 
       <section class="intelligence-stack">
+        <div class="panel dossier-panel">
+          <div class="dossier-header">
+            <div><div class="eyebrow">PROJECT DOSSIER</div><h3>项目档案与依据</h3><p>区分项目登记、资料摘录和自动汇总；保留来源与时间。</p></div>
+            <button id="dossier-settings-btn" class="secondary-button" type="button">修正项目关联</button>
+          </div>
+          <div id="intelligence-dossier" class="dossier-body"><div class="intelligence-empty">正在读取项目依据…</div></div>
+        </div>
+
         <div class="panel intelligence-search-card">
           <div class="intelligence-search-row">
             <label class="intelligence-search-box">
@@ -158,7 +166,7 @@
         <div class="intelligence-overview-grid">
           <div class="panel intelligence-card">
             <div class="intelligence-card-head">
-              <div><h3>这个项目是什么</h3><p>开发侧 AI 的项目认知与平台真实材料联合展示</p></div>
+              <div><h3>详细项目认知</h3><p>查看开发侧记录的当前工作、已知问题与事实候选</p></div>
             </div>
             <div id="intelligence-context"></div>
           </div>
@@ -417,14 +425,14 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/app.js"></script>
-  <script src="/settings.js"></script>
+  <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
   <script src="/settings-policy.js"></script>
   <script src="/settings-model.js?v=m7-tracememo-1"></script>
   <script src="/settings-nodes.js"></script>
   <script src="/settings-wechat.js?v=m7-tracememo-1"></script>
-  <script src="/project-intelligence.js"></script>
+  <script src="/project-intelligence.js?v=p1-dossier-1"></script>
   <script src="/project-communications.js"></script>
 </body>
 </html>
