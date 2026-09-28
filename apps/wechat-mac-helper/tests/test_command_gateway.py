@@ -65,6 +65,16 @@ class CommandGatewayTests(unittest.TestCase):
         self.assertEqual(gateway.ingest(self.conn, reader, now=1011), 0)
         self.assertEqual(self.conn.execute("SELECT command FROM commands").fetchone()[0], "/项目 列表")
 
+    def test_delayed_wechat_sync_is_not_lost_or_reexecuted(self):
+        self.conn.execute("INSERT INTO gateway_meta(key,value) VALUES('last_poll','199900')")
+        self.conn.commit()
+        reader = Reader([{
+            "serverId": "delayed", "createTime": 196400,
+            "content": "/项目 列表", "type": "普通文本", "isSender": True,
+        }])
+        self.assertEqual(gateway.ingest(self.conn, reader, now=200000), 1)
+        self.assertEqual(gateway.ingest(self.conn, reader, now=200001), 0)
+
     def test_actions_wait_for_sender_and_expire(self):
         self.conn.execute("INSERT INTO commands(message_id,created_at,command) VALUES('1',1000,'/执行 处理项目')")
         self.conn.commit()

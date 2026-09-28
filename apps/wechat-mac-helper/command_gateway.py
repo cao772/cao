@@ -108,7 +108,10 @@ def accept_message(message: dict[str, Any]) -> bool:
 def ingest(conn: sqlite3.Connection, reader: TraceMemoReader, now: int | None = None) -> int:
     now = now or int(time.time())
     checkpoint = conn.execute("SELECT value FROM gateway_meta WHERE key='last_poll'").fetchone()
-    start = int(checkpoint[0]) - 120 if checkpoint else now - 24 * 3600
+    # WeChat can sync a message well after its original timestamp (for example
+    # after the Mac account logs back in). Re-scan a bounded window; the message
+    # ID primary key prevents a delayed sync from executing the command twice.
+    start = min(int(checkpoint[0]) - 120, now - 24 * 3600) if checkpoint else now - 24 * 3600
     messages = reader._get("/api/v1/chatlog", params={"talker": TALKER, "startTime": str(start)}).get("messages")
     if not isinstance(messages, list):
         raise ValueError("TraceMemo returned an invalid chatlog")
