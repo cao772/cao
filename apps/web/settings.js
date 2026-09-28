@@ -107,6 +107,9 @@ function setBusy(button, busy, busyText = '处理中...') {
 
 function showSettings() {
   settingsEls.dashboard.classList.add('hidden');
+  document.getElementById('portfolio-view')?.classList.add('hidden');
+  document.getElementById('intelligence-view')?.classList.add('hidden');
+  document.getElementById('portfolio-nav')?.classList.remove('active');
   settingsEls.view.classList.remove('hidden');
   settingsEls.nav.classList.add('active');
   document.querySelectorAll('.project-item[data-project-id]').forEach(item => item.classList.remove('active'));
@@ -119,6 +122,7 @@ function showSettings() {
 
 function showDashboard() {
   settingsEls.view.classList.add('hidden');
+  document.getElementById('portfolio-view')?.classList.add('hidden');
   settingsEls.dashboard.classList.remove('hidden');
   settingsEls.nav.classList.remove('active');
 }
