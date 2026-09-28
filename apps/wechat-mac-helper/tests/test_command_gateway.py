@@ -81,6 +81,13 @@ class CommandGatewayTests(unittest.TestCase):
             calls.append((url, token, body))
             if url.endswith("/brief"):
                 return {"current_stage": "验证", "issues": ["需核验模型"]}
+            if url.endswith("/intelligence"):
+                return {
+                    "profile": {"description": "电力设备缺陷处置", "repositories": [{"id": "defect", "url": "https://example.invalid/defect"}]},
+                    "context": {"available": True, "project": {"purpose": "巡检缺陷分级"}},
+                    "materials": [{"name": "最新评测报告.pdf", "path": "材料/最新评测报告.pdf",
+                                   "version_status": "current", "summary": "已完成验证"}],
+                }
             return {"choices": [{"message": {"content": "缺陷项目处于验证阶段。"}}]}
 
         projects = [
@@ -90,12 +97,24 @@ class CommandGatewayTests(unittest.TestCase):
         with patch.object(gateway, "DEEPSEEK_KEY_FILE", key_file), patch.object(gateway, "_projects", return_value=projects), patch.object(gateway, "_json_request", side_effect=request):
             answer = gateway.project_question("/问 缺陷项目有什么问题？")
         self.assertIn("缺陷项目处于验证阶段。", answer)
-        self.assertIn("依据：本机研发平台项目简报 power-defect-agent", answer)
-        self.assertEqual(len(calls), 2)
+        self.assertIn("依据：本机研发平台项目简报与项目认知 power-defect-agent", answer)
+        self.assertEqual(len(calls), 3)
         self.assertIn("power-defect-agent/brief", calls[0][0])
+        self.assertIn("power-defect-agent/intelligence", calls[1][0])
         self.assertNotIn("low-voltage", str(calls))
-        self.assertEqual(calls[1][1], "test-key")
-        self.assertEqual(calls[1][2]["model"], "deepseek-flash")
+        self.assertEqual(calls[2][1], "test-key")
+        self.assertEqual(calls[2][2]["model"], "deepseek-flash")
+        question_payload = calls[2][2]["messages"][1]["content"]
+        self.assertIn("最新评测报告.pdf", question_payload)
+        self.assertIn("https://example.invalid/defect", question_payload)
+
+    def test_mobile_answer_cuts_at_line_and_marks_truncation(self):
+        text = "甲" * 40 + "\n" + "乙" * 40 + "\n" + "丙" * 40
+        answer = gateway._mobile_reply(text, limit=90)
+        self.assertEqual(answer.splitlines()[0], "甲" * 40)
+        self.assertEqual(answer.splitlines()[1], "乙" * 40)
+        self.assertIn("已截取", answer)
+        self.assertNotIn("丙", answer)
 
     def test_project_search_returns_material_and_wechat_sources(self):
         projects = [{"project_id": "hy-claw", "project_name": "HY CLAW 内研"}]
@@ -122,7 +141,9 @@ class CommandGatewayTests(unittest.TestCase):
     def test_project_background_and_materials_use_intelligence(self):
         projects = [{"project_id": "low-voltage", "project_name": "低电压治理"}]
         intelligence = {
-            "profile": {"description": "配网低电压治理审查", "repositories": [{"url": "https://example.invalid/repo"}]},
+            "profile": {"description": "配网低电压治理审查", "repositories": [{"id": "low-voltage", "provider": "GitLab",
+                                                                  "branch": "main", "head": "abcdef1234567890",
+                                                                  "url": "https://oauth2:secret@example.invalid/repo?token=secret"}]},
             "context": {"project": {"current_stage": "测试与验证"}},
             "summary": {"material_count": 2},
             "materials": [
@@ -134,10 +155,23 @@ class CommandGatewayTests(unittest.TestCase):
         with patch.object(gateway, "_projects", return_value=projects), patch.object(gateway, "_json_request", return_value=intelligence):
             background = gateway.project_command("/项目 低电压 背景")
             materials = gateway.project_command("/项目 低电压 材料")
+            repositories = gateway.project_command("/项目 低电压 仓库")
         self.assertIn("配网低电压治理审查", background)
         self.assertIn("https://example.invalid/repo", background)
+        self.assertNotIn("secret", background)
         self.assertIn("新版可研.pdf", materials)
         self.assertNotIn("旧版可研.pdf", materials)
+        self.assertIn("GitLab · main · abcdef123456", repositories)
+        self.assertIn("https://example.invalid/repo", repositories)
+        self.assertNotIn("secret", repositories)
+
+    def test_model_facts_strip_repository_credentials(self):
+        with patch.object(gateway, "_json_request", return_value={
+            "profile": {"repositories": [{"url": "https://user:secret@example.invalid/repo?token=secret"}]},
+            "context": {}, "materials": [],
+        }):
+            facts = gateway._intelligence_facts("hy-claw")
+        self.assertEqual(facts["repositories"][0]["url"], "https://example.invalid/repo")
 
     def test_send_is_only_confirmed_by_personal_chatlog(self):
         self.conn.execute(

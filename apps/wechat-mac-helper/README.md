@@ -65,6 +65,7 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
     /项目 缺陷 背景
     /项目 低电压 材料
     /项目 缺陷 指标
+    /项目 hy-claw 仓库
     /项目 hy-claw 下一步
     /项目 hy-claw 搜索 关键词
     /状态
@@ -72,7 +73,7 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
     /问 低电压项目现在的主要风险是什么？
     /执行 检查本机研发平台并修复故障
 
-`/项目 … 背景/材料` 从本机项目认知读取背景、代码仓库及当前材料；`/项目 … 搜索` 直接返回匹配材料的文件名、位置、路径与沟通记录摘录。`/问` 从本机 Central 获取相关项目事实，并用已授权的 DeepSeek `deepseek-flash` 回答，附项目简报来源与资料基准日期；只发送选中项目简报与当前问题，不上传整库或其他微信聊天。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在已验证的回信通道就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
+`/项目 … 背景/材料/仓库` 从本机项目认知读取背景、当前材料及仓库分支和 HEAD；`/项目 … 搜索` 直接返回匹配材料的文件名、位置、路径与沟通记录摘录。`/问` 从本机 Central 获取项目简报；明确提到某个项目时，再加入该项目的背景、仓库和最多 8 份材料的文件名及短摘要，用已授权的 DeepSeek `deepseek-flash` 回答，附来源与资料基准日期。仓库地址中的账号、密码和 URL 参数在发往微信或模型前会移除。它不会把材料全文、完整聊天库或其他项目的原始消息送给模型。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在已验证的回信通道就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
 
 安装登录常驻：
 

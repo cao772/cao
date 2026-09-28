@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -176,6 +177,27 @@ def _short(value: Any, limit: int = 110) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+def _mobile_reply(value: str, limit: int = 1450) -> str:
+    if len(value) <= limit:
+        return value
+    break_at = value.rfind("\n", limit // 2, limit)
+    if break_at < 0:
+        break_at = limit
+    return value[:break_at].rstrip() + "\n（回答较长，已截取；可缩小问题范围继续问）"
+
+
+def _safe_repo_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    try:
+        parts = urllib.parse.urlsplit(raw)
+        if parts.scheme not in {"http", "https", "ssh"} or not parts.hostname:
+            return ""
+        host = parts.hostname + (f":{parts.port}" if parts.port else "")
+    except ValueError:
+        return ""
+    return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
 def _project_action(command: str, projects: list[dict[str, Any]]) -> tuple[str, str]:
     """Resolve full project names and aliases before splitting off the action."""
     remaining = command[len("/项目"):].strip()
@@ -245,8 +267,31 @@ def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
         repositories = profile.get("repositories") or []
         for repo in repositories[:3]:
             if isinstance(repo, dict):
-                lines.append("代码：" + _short(repo.get("url") or repo.get("id"), 160))
+                lines.append("代码：" + _short(_safe_repo_url(repo.get("url")) or repo.get("id"), 160))
         lines.append("资料：" + str(summary.get("material_count") or 0) + " 份")
+        if profile.get("observed_at"):
+            lines.append("本机采集：" + str(profile["observed_at"])[:16].replace("T", " "))
+        return "\n".join(lines)[:1700]
+    if action in {"代码", "仓库"}:
+        repositories = profile.get("repositories") or []
+        lines = [name + "：代码仓库"]
+        for repo in repositories[:6]:
+            if not isinstance(repo, dict):
+                continue
+            label = _short(repo.get("id") or "未命名仓库", 60)
+            provider = _short(repo.get("provider") or "本机", 30)
+            branch = _short(repo.get("branch") or "分支未识别", 50)
+            head = str(repo.get("head") or "")[:12]
+            lines.append(f"• {label}（{provider} · {branch}{' · ' + head if head else ''}）")
+            url = _safe_repo_url(repo.get("url"))
+            if url:
+                lines.append("  " + _short(url, 180))
+            if repo.get("dirty"):
+                lines.append("  本地工作区有未提交修改")
+        if len(lines) == 1:
+            lines.append("尚未采集到代码仓库。")
+        if profile.get("observed_at"):
+            lines.append("本机采集：" + str(profile["observed_at"])[:16].replace("T", " "))
         return "\n".join(lines)[:1700]
     materials = result.get("materials") or []
     if not isinstance(materials, list):
@@ -257,8 +302,10 @@ def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
                     key=lambda m: str(m.get("modified_at") or ""), reverse=True)[:5]
     lines = [f"{name}：已识别 {summary.get('material_count', len(materials))} 份资料，以下为当前/最新材料："]
     for material in listed:
+        modified = str(material.get("modified_at") or "")[:10]
         lines.append(f"• {_short(material.get('name') or material.get('path'), 95)}"
-                     f"（{_short(material.get('material_type_label') or '资料', 20)}）")
+                     f"（{_short(material.get('material_type_label') or '资料', 20)}"
+                     f"{' · ' + modified if modified else ''}）")
         if material.get("summary"):
             lines.append("  " + _short(material["summary"], 110))
         if material.get("path"):
@@ -284,13 +331,13 @@ def project_command(command: str) -> str:
         if not isinstance(result, dict):
             raise ValueError("搜索结果格式错误")
         return _search_reply(name, result)
-    if action in {"背景", "材料"}:
+    if action in {"背景", "材料", "代码", "仓库"}:
         intelligence = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/intelligence")
         if not isinstance(intelligence, dict):
             raise ValueError("项目认知格式错误")
         return _intelligence_reply(name, action, intelligence)
     if action not in {"概览", "进度", "问题", "下一步", "任务", "指标"}:
-        return "可用命令：/项目 列表；/项目 缺陷 背景；/项目 低电压 材料；/项目 hy-claw 搜索 关键词；/帮助"
+        return "可用命令：/项目 列表；/项目 缺陷 背景；/项目 低电压 材料；/项目 hy-claw 仓库；/项目 hy-claw 搜索 关键词；/帮助"
     result = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/brief")
     if not isinstance(result, dict):
         raise ValueError("项目简报格式错误")
@@ -359,6 +406,51 @@ def codex_command(command: str, *, readonly: bool) -> str:
     return answer[:1800] or "Codex 已执行，但没有返回文字结果。"
 
 
+def _intelligence_facts(project_id: str) -> dict[str, Any]:
+    """Send only selected project metadata and short material summaries to the model."""
+    data = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/intelligence")
+    if not isinstance(data, dict):
+        raise ValueError("项目认知格式错误")
+    profile = data.get("profile") or {}
+    context = data.get("context") or {}
+    if not isinstance(profile, dict) or not isinstance(context, dict):
+        raise ValueError("项目认知格式错误")
+    project = context.get("project") or {}
+    if not isinstance(project, dict):
+        project = {}
+    repositories = []
+    for raw in (profile.get("repositories") or [])[:6]:
+        if isinstance(raw, dict):
+            repositories.append({**{key: raw.get(key) for key in ("id", "role", "provider", "branch", "head")},
+                                 "url": _safe_repo_url(raw.get("url"))})
+    current_statuses = {"current", "latest_period", "primary", "active_related", "single"}
+    materials = [item for item in data.get("materials") or [] if isinstance(item, dict)]
+    materials.sort(key=lambda item: (item.get("version_status") in current_statuses,
+                                     str(item.get("modified_at") or "")), reverse=True)
+    selected_materials = [
+        {"name": item.get("name"), "path": item.get("path"),
+         "type": item.get("material_type_label"), "summary": _short(item.get("summary"), 350),
+         "modified_at": item.get("modified_at"), "version_status": item.get("version_status")}
+        for item in materials[:8]
+    ]
+    known_facts = []
+    for item in (context.get("known_facts") or [])[:8]:
+        if isinstance(item, dict):
+            known_facts.append({"fact": _short(item.get("fact"), 350), "source": _short(item.get("source"), 120)})
+        elif isinstance(item, str):
+            known_facts.append(_short(item, 350))
+    return {
+        "description": _short(project.get("purpose") or project.get("description") or profile.get("description"), 500),
+        "context_updated_at": context.get("generated_at") or context.get("modified_at"),
+        "context_available": bool(context.get("available")),
+        "current_work": [_short(item, 300) for item in (context.get("current_work") or [])[:8]],
+        "known_issues": [_short(item, 300) for item in (context.get("known_issues") or [])[:8]],
+        "known_facts": known_facts,
+        "repositories": repositories,
+        "materials": selected_materials,
+    }
+
+
 def project_question(command: str) -> str:
     """Answer from selected Central facts with the user-approved DeepSeek model."""
     question = command.partition(" ")[2].strip()
@@ -377,6 +469,7 @@ def project_question(command: str) -> str:
         }.get(project_id, ())
         if project_id.casefold() in question.casefold() or name in question or any(alias in question.casefold() for alias in aliases):
             selected.append(project)
+    explicitly_selected = bool(selected)
     if not selected:
         selected = projects[:8]
     facts = []
@@ -390,6 +483,11 @@ def project_question(command: str) -> str:
             "project_name": project.get("project_name"),
             **{key: brief.get(key) for key in ("current_stage", "completed", "in_progress", "issues", "next_steps", "latest_metrics", "summary", "source_status")},
         })
+        if explicitly_selected:
+            try:
+                facts[-1]["intelligence"] = _intelligence_facts(project_id)
+            except (OSError, urllib.error.URLError, ValueError):
+                facts[-1]["intelligence_status"] = "unavailable"
     if not facts:
         return "本机研发平台尚无可核对的项目简报，暂时无法回答。"
     key = DEEPSEEK_KEY_FILE.read_text(encoding="utf-8").strip()
@@ -398,10 +496,10 @@ def project_question(command: str) -> str:
     payload = {
         "model": "deepseek-flash",
         "messages": [
-            {"role": "system", "content": "你是用户的研发项目助手。只根据附带的本机项目事实回答；区分已完成、进行中、问题和推断。资料没有的信息明确说不知道。留意 source_status.freshness_reference_date，不能把旧资料冒充今天进度。每个项目的事实写出对应 project_id。用简洁中文回答，不泄露密钥。"},
+            {"role": "system", "content": "你是用户的研发项目助手，回复会作为微信纯文本发送。只根据附带的本机项目事实回答；区分已完成、进行中、问题和推断。intelligence.materials 是材料索引和短摘要，不代表已读全文；引用材料时写出文件名。留意 source_status.freshness_reference_date 和 intelligence.context_updated_at，不能把旧资料冒充今天进度。每个项目的事实写出对应 project_id。资料没有的信息明确说不知道。不使用 Markdown 表格，每段简短，尽量不超过 700 个汉字；只列最关键的材料和仓库。不要泄露密钥。"},
             {"role": "user", "content": "问题：" + question + "\n\n本机研发平台事实：" + json.dumps(facts, ensure_ascii=False)[:24000]},
         ],
-        "max_tokens": 900,
+        "max_tokens": 700,
         "thinking": {"type": "disabled"},
         "stream": False,
     }
@@ -417,7 +515,8 @@ def project_question(command: str) -> str:
             if (fact.get("source_status") or {}).get("freshness_reference_date") else ""
         ) for fact in facts
     )
-    return reply[:1450] + "\n依据：本机研发平台项目简报 " + sources[:280]
+    source_kind = "项目简报与项目认知" if explicitly_selected else "项目简报"
+    return _mobile_reply(reply) + "\n依据：本机研发平台" + source_kind + " " + sources[:280]
 
 
 def status_command() -> str:
@@ -450,7 +549,7 @@ def execute(command: str) -> str:
     if command == "/帮助":
         return ("请在你自己微信的「文件传输助手」发送指令，结果会回到当前测试私聊：\n"
                 "/项目 列表\n/项目 缺陷 背景\n/项目 低电压 材料\n"
-                "/项目 HY CLAW 进度\n/项目 缺陷 搜索 关键词\n"
+                "/项目 HY CLAW 进度\n/项目 hy-claw 仓库\n/项目 缺陷 搜索 关键词\n"
                 "/问 HY CLAW 现在做到哪了？\n/状态\n/执行 具体任务\n"
                 "当前这个 TraceMemo 机器人自身的聊天问答与项目指令入口尚未打通。")
     return "未识别命令。"
