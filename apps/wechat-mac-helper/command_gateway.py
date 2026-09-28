@@ -563,7 +563,8 @@ def status_command() -> str:
         sender_status = "已连接" if bot_recipient(token) else "未连接"
     except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError):
         sender_status = "未连接"
-    return f"本机研发平台：{central_status}\n微信读取：{reader_status}\n测试私聊回复：{sender_status}"
+    return (f"本机研发平台：{central_status}\n本地聊天库：{reader_status}"
+            f"（不代表 Mac 微信已登录）\n测试私聊回复：{sender_status}")
 
 
 def execute(command: str) -> str:
