@@ -322,6 +322,89 @@ def _infer_stage(
     return "尚未形成明确阶段"
 
 
+def _stage_basis(
+    stage: str,
+    snapshots: list[dict[str, Any]],
+    remote_events: list[dict[str, Any]],
+    work_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Expose the inputs to the heuristic stage label, without claiming verification."""
+    source_types = {
+        "问题处理与联调": ("blockers", "tests"),
+        "开发联调与验证": ("tests", "progress"),
+        "功能开发": ("progress", "tasks"),
+        "测试与验证": ("tests",),
+        "需求梳理": ("requirements",),
+    }.get(stage, ())
+    candidates: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        memory = (((snapshot.get("payload") or {}).get("analysis") or {}).get("current_project_memory") or {})
+        for category in source_types:
+            for fact in memory.get(category) or []:
+                if not isinstance(fact, dict) or not fact.get("path") or not _text(fact):
+                    continue
+                candidates.append({
+                    "path": str(fact["path"]),
+                    "text": _text(fact),
+                    "source_date": str(fact.get("source_date") or fact.get("document_date") or "") or None,
+                    "observed_at": snapshot.get("observed_at"),
+                    "kind": category,
+                })
+    candidates.sort(key=lambda item: (item.get("source_date") or "", item.get("observed_at") or ""), reverse=True)
+    evidence: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in candidates:
+        key = (item["path"], item["text"])
+        if key in seen:
+            continue
+        seen.add(key)
+        evidence.append(item)
+        if len(evidence) == 3:
+            break
+
+    reason = {
+        "问题处理与联调": "存在待处理问题及活动任务",
+        "开发联调与验证": "存在活动任务及测试或近期代码活动",
+        "功能开发": "存在活动任务",
+        "测试与验证": "材料中存在测试或问题记录",
+        "需求梳理": "材料中存在需求记录",
+        "持续迭代": "近期存在代码提交或推送",
+        "尚未形成明确阶段": "当前证据不足以判断阶段",
+    }.get(stage, "基于现有项目活动自动推断")
+    if not evidence and stage in {"功能开发", "开发联调与验证", "问题处理与联调"}:
+        for item in work_items:
+            if str(item.get("status") or "") in ACTIVE_STATUSES | ATTENTION_STATUSES:
+                evidence.append({"text": _text(item.get("title") or item.get("task_id")), "kind": "task", "path": None, "source_date": None})
+                break
+    if not evidence and stage == "持续迭代":
+        for event in remote_events:
+            if event.get("event_type") in {"git.commit", "git.push"}:
+                evidence.append({"text": str(event.get("event_type")), "kind": "remote", "path": None,
+                                 "source_date": event.get("observed_at"), "repository_id": event.get("repository_id")})
+                break
+    return {"method": "heuristic", "reason": reason, "evidence": evidence}
+
+
+def _source_refs(snapshots: list[dict[str, Any]], keys: tuple[str, ...], lines: list[str]) -> list[dict[str, Any]]:
+    """Match brief text back to its material, keeping unknown origins explicit."""
+    by_text: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for snapshot in snapshots:
+        memory = (((snapshot.get("payload") or {}).get("analysis") or {}).get("current_project_memory") or {})
+        for key in keys:
+            for fact in memory.get(key) or []:
+                if isinstance(fact, dict) and _text(fact):
+                    by_text[_text(fact)].append({
+                        "path": fact.get("path"),
+                        "source_date": fact.get("source_date") or fact.get("document_date"),
+                        "observed_at": snapshot.get("observed_at"),
+                    })
+    refs: list[dict[str, Any]] = []
+    for line in lines:
+        matches = sorted(by_text.get(line) or [], key=lambda item: (str(item.get("source_date") or ""), str(item.get("observed_at") or "")), reverse=True)
+        refs.append({"text": line, **(matches[0] if matches else {"path": None, "source_date": None, "observed_at": None})})
+    return refs
+
+
 def build_project_brief(
     workspace_snapshots: list[dict[str, Any]],
     fusion: dict[str, Any],
@@ -375,6 +458,8 @@ def build_project_brief(
     next_steps = _next_lines(tasks_from_docs + progress)
     next_steps.extend(_text(item.get("title") or item.get("task_id")) for item in confirmed_planned)
     next_steps = _dedupe(next_steps, 12)
+    next_step_evidence = _source_refs(workspace_snapshots, ("tasks", "progress"), next_steps)
+    decision_evidence = _source_refs(workspace_snapshots, ("decisions",), decisions[:8])
 
     metric_details = _metric_details(progress + tests_objects)
     metrics = [item["text"] for item in metric_details]
@@ -392,6 +477,7 @@ def build_project_brief(
         requirements=requirements,
         remote_counts=remote_counts,
     )
+    stage_basis = _stage_basis(stage, workspace_snapshots, remote_events, work_items)
     weekly_progress = _build_weekly_progress(workspace_snapshots, remote_events, agent_events)
 
     historical_count = 0
@@ -409,13 +495,16 @@ def build_project_brief(
     return {
         "version": 2,
         "current_stage": stage,
+        "current_stage_basis": stage_basis,
         "completed": completed,
         "in_progress": in_progress,
         "issues": issues,
         "next_steps": next_steps,
+        "next_step_evidence": next_step_evidence,
         "latest_metrics": metrics,
         "latest_metric_details": metric_details,
         "recent_decisions": decisions[:8],
+        "decision_evidence": decision_evidence,
         "weekly_progress": weekly_progress,
         "summary": {
             "in_progress_task_count": len(active_items),
