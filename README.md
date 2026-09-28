@@ -2,7 +2,7 @@
 
 面向多项目、多开发人员、多 Coding Agent 的研发感知与协同管理平台。
 
-当前已完成 **Phase 1 本地感知核心闭环**，正在推进 **Phase 2 远端证据融合 + Phase 3 Coding Agent MCP 接入**。
+本机已接入真实项目、仓库、材料与开发事件。面向日常项目管理的长期方向、阶段验收和当前边界见 [产品路线图](docs/product-roadmap.md)。
 
 核心目标：
 - 本地 Project Sentinel 感知 Git 尚未提交的真实开发现场；

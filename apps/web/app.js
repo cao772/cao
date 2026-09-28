@@ -1,4 +1,4 @@
-const state = { projects: [], selectedProjectId: null, detail: null };
+const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, globalSearchLoadId: 0 };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -15,6 +15,19 @@ const els = {
   apiState: document.getElementById('api-state'),
   apiStateText: document.getElementById('api-state-text'),
   toast: document.getElementById('toast'),
+  portfolioNav: document.getElementById('portfolio-nav'),
+  portfolioView: document.getElementById('portfolio-view'),
+  portfolioOverview: document.getElementById('portfolio-overview'),
+  portfolioGrid: document.getElementById('portfolio-grid'),
+  portfolioStatus: document.getElementById('portfolio-status'),
+  portfolioSearch: document.getElementById('portfolio-search'),
+  portfolioRefresh: document.getElementById('portfolio-refresh-btn'),
+  globalSearchInput: document.getElementById('global-search-input'),
+  globalSearchProject: document.getElementById('global-search-project'),
+  globalSearchSource: document.getElementById('global-search-source'),
+  globalSearchButton: document.getElementById('global-search-btn'),
+  globalSearchStatus: document.getElementById('global-search-status'),
+  globalSearchResults: document.getElementById('global-search-results'),
 };
 
 async function api(path) {
@@ -69,6 +82,190 @@ function renderProjectList() {
   els.projectList.querySelectorAll('[data-project-id]').forEach(button => {
     button.addEventListener('click', () => selectProject(button.dataset.projectId));
   });
+}
+
+function portfolioDate(value) {
+  if (!value) return '时间未知';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function portfolioSourceDate(row) {
+  return row.brief?.source_status?.freshness_reference_date || row.intelligence?.context?.modified_at || null;
+}
+
+function portfolioAgeDays(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86400000));
+}
+
+function portfolioStat(label, value, note, attention = false) {
+  return `<div class="portfolio-stat${attention ? ' attention' : ''}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(note)}</small></div>`;
+}
+
+function renderPortfolio() {
+  const rows = state.portfolioRows;
+  const incomplete = rows.some(row => row.briefError || row.intelligenceError);
+  const complete = rows.filter(row => !row.briefError && !row.intelligenceError).length;
+  const materialRows = rows.filter(row => row.intelligence);
+  const repoCount = materialRows.reduce((sum, row) => sum + (row.intelligence.profile?.repositories?.length || 0), 0);
+  const materialCount = materialRows.reduce((sum, row) => sum + (row.intelligence.summary?.material_count || 0), 0);
+  const attentionCount = state.projects.filter(project => project.project_state === 'attention').length;
+  const oldSourceCount = rows.filter(row => (portfolioAgeDays(portfolioSourceDate(row)) ?? 0) > 14).length;
+  const unknownSourceCount = rows.filter(row => !portfolioSourceDate(row)).length;
+  els.portfolioOverview.innerHTML = [
+    portfolioStat('业务项目', state.projects.length, '当前已接入'),
+    portfolioStat('需要关注', attentionCount, '根据项目采集状态', attentionCount > 0),
+    portfolioStat('已识别资料', materialRows.length ? materialCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
+    portfolioStat('关联仓库', materialRows.length ? repoCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
+  ].join('');
+  const status = incomplete
+    ? `已读取 ${complete}/${state.projects.length} 个项目的完整概况；部分来源暂不可用。`
+    : `已读取 ${state.projects.length} 个项目的背景与最新概况。`;
+  els.portfolioStatus.textContent = `${status}${oldSourceCount ? ` ${oldSourceCount} 个项目资料超过 14 天，建议核对。` : ''}${unknownSourceCount ? ` ${unknownSourceCount} 个项目资料时间未知。` : ''}`;
+
+  const query = els.portfolioSearch.value.trim().toLocaleLowerCase();
+  const filtered = rows.filter(row => {
+    const brief = row.brief || {};
+    const knowledge = row.intelligence || {};
+    return [projectLabel(row.project), knowledge.profile?.description, knowledge.context?.project?.purpose,
+      knowledge.context?.project?.current_stage, brief.current_stage, ...(brief.next_steps || [])]
+      .some(value => String(value || '').toLocaleLowerCase().includes(query));
+  });
+  els.portfolioGrid.innerHTML = filtered.length ? filtered.map(row => {
+    const project = row.project;
+    const brief = row.brief || {};
+    const knowledge = row.intelligence || {};
+    const description = knowledge.profile?.description || knowledge.context?.project?.purpose || '背景资料尚未接入';
+    const stage = knowledge.context?.project?.current_stage || brief.current_stage || '尚未识别';
+    const nextRaw = (brief.next_steps || [])[0] || (knowledge.context?.project?.current_work || [])[0] || '尚未识别明确下一步';
+    const next = String(nextRaw).replace(/^\s*[-*•]\s*/, '');
+    const issueCount = brief.issues?.length;
+    const materialCount = knowledge.summary?.material_count;
+    const repositories = knowledge.profile?.repositories?.length;
+    const groups = knowledge.communications?.group_count;
+    const sourceDate = portfolioSourceDate(row);
+    const sourceAge = portfolioAgeDays(sourceDate);
+    const tone = project.project_state === 'attention' ? 'warn' : project.project_state === 'active' ? 'info' : 'neutral';
+    return `<article class="portfolio-card">
+      <div class="portfolio-card-head"><span class="portfolio-card-id">${escapeHtml(project.project_id)}</span><span class="badge ${tone}">${escapeHtml(project.project_state_label || '状态待确认')}</span></div>
+      <h4>${escapeHtml(projectLabel(project))}</h4>
+      <p class="portfolio-card-description">${escapeHtml(description)}</p>
+      <div class="portfolio-focus"><span>当前阶段</span><strong>${escapeHtml(stage)}</strong></div>
+      <div class="portfolio-focus next"><span>下一步</span><strong title="${escapeHtml(next)}">${escapeHtml(next)}</strong></div>
+      <div class="portfolio-facts">
+        <span class="${issueCount ? 'issue' : ''}">问题 ${issueCount ?? '—'}</span>
+        <span>资料 ${materialCount ?? '—'}</span><span>仓库 ${repositories ?? '—'}</span><span>群聊 ${groups ?? '—'}</span>
+      </div>
+      <div class="portfolio-date${sourceAge === null || sourceAge > 14 ? ' stale' : ''}">资料日期：${escapeHtml(portfolioDate(sourceDate))}${sourceAge > 14 ? `（距今 ${sourceAge} 天，建议核对）` : ''} · 本地采集：${escapeHtml(portfolioDate(project.last_seen_at))}</div>
+      ${row.briefError || row.intelligenceError ? '<p class="portfolio-error">部分概况读取失败，详情中可能有更多信息。</p>' : ''}
+      <div class="portfolio-actions">
+        <button class="portfolio-open" type="button" data-portfolio-open="${escapeHtml(project.project_id)}">查看进展</button>
+        <button class="portfolio-knowledge" type="button" data-portfolio-knowledge="${escapeHtml(project.project_id)}">资料与沟通</button>
+      </div>
+    </article>`;
+  }).join('') : `<div class="portfolio-empty">${query ? '没有匹配的项目。请试试项目名称或背景关键词。' : '暂无项目，等待首次采集。'}</div>`;
+  els.portfolioGrid.querySelectorAll('[data-portfolio-open]').forEach(button => {
+    button.addEventListener('click', () => selectProject(button.dataset.portfolioOpen));
+  });
+  els.portfolioGrid.querySelectorAll('[data-portfolio-knowledge]').forEach(button => {
+    button.addEventListener('click', () => {
+      selectProject(button.dataset.portfolioKnowledge);
+      showIntelligenceView();
+    });
+  });
+}
+
+async function loadPortfolio() {
+  const loadId = ++state.portfolioLoadId;
+  els.portfolioStatus.textContent = '正在汇总项目背景、资料和进度…';
+  els.portfolioGrid.innerHTML = '<div class="portfolio-empty">正在读取项目概况…</div>';
+  const rows = await Promise.all(state.projects.map(async project => {
+    const encoded = encodeURIComponent(project.project_id);
+    const [brief, intelligence] = await Promise.allSettled([
+      api(`/api/v1/projects/${encoded}/brief`),
+      api(`/api/v1/projects/${encoded}/intelligence`),
+    ]);
+    return {
+      project,
+      brief: brief.status === 'fulfilled' ? brief.value : null,
+      intelligence: intelligence.status === 'fulfilled' ? intelligence.value : null,
+      briefError: brief.status === 'rejected',
+      intelligenceError: intelligence.status === 'rejected',
+    };
+  }));
+  if (loadId !== state.portfolioLoadId) return;
+  state.portfolioRows = rows;
+  renderPortfolio();
+}
+
+function showPortfolio() {
+  state.selectedProjectId = null;
+  renderProjectList();
+  els.portfolioNav.classList.add('active');
+  document.getElementById('settings-nav')?.classList.remove('active');
+  document.getElementById('settings-view')?.classList.add('hidden');
+  document.getElementById('intelligence-view')?.classList.add('hidden');
+  document.getElementById('dashboard-view')?.classList.add('hidden');
+  els.portfolioView.classList.remove('hidden');
+  const selectedSearchProject = els.globalSearchProject.value;
+  els.globalSearchProject.innerHTML = '<option value="">全部项目</option>' + state.projects.map(project => `<option value="${escapeHtml(project.project_id)}">${escapeHtml(project.project_name || project.project_id)}</option>`).join('');
+  if (state.projects.some(project => project.project_id === selectedSearchProject)) els.globalSearchProject.value = selectedSearchProject;
+  return loadPortfolio().catch(error => {
+    els.portfolioStatus.textContent = '项目概况读取失败';
+    els.portfolioGrid.innerHTML = '<div class="portfolio-empty">读取失败，请点击“刷新数据”重试。</div>';
+    showToast(`读取项目总览失败：${error.message}`, true);
+  });
+}
+
+function renderGlobalSearchResults(payload) {
+  const results = payload.results || [];
+  const unavailable = payload.unavailable_projects || [];
+  els.globalSearchStatus.textContent = `找到 ${payload.count || 0} 项${results.length < (payload.count || 0) ? `，显示前 ${results.length} 项` : ''}。${payload.conversation_available === false ? ' 授权沟通尚未接入此部署。' : ''}${unavailable.length ? ` ${unavailable.length} 个项目暂时无法检索。` : ''}`;
+  els.globalSearchResults.innerHTML = results.length ? results.map((item, index) => `
+    <article class="portfolio-search-hit">
+      <strong>${escapeHtml(item.project_name)} · ${escapeHtml(item.source_name || '未命名来源')}</strong>
+      ${item.snippet ? `<p>${escapeHtml(item.snippet)}</p>` : ''}
+      <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
+      <button type="button" data-global-search-open="${index}">在项目中查看</button>
+    </article>`).join('') : '<div class="portfolio-empty">没有找到匹配内容。试试项目名、文件名或更短的业务关键词。</div>';
+  els.globalSearchResults.querySelectorAll('[data-global-search-open]').forEach(button => button.addEventListener('click', async () => {
+    const item = results[Number(button.dataset.globalSearchOpen)];
+    if (!item) return;
+    await selectProject(item.project_id);
+    await showIntelligenceView();
+    const searchInput = document.getElementById('intelligence-search-input');
+    if (searchInput) searchInput.value = payload.query;
+    await runIntelligenceSearch();
+  }));
+}
+
+async function runGlobalSearch() {
+  const query = els.globalSearchInput.value.trim();
+  if (!query) {
+    els.globalSearchStatus.textContent = '请输入关键词。';
+    return;
+  }
+  const requestId = ++state.globalSearchLoadId;
+  els.globalSearchButton.disabled = true;
+  els.globalSearchStatus.textContent = '正在检索已采集的项目材料与授权沟通…';
+  const params = new URLSearchParams({ q: query, source: els.globalSearchSource.value, limit: '30' });
+  if (els.globalSearchProject.value) params.set('project_id', els.globalSearchProject.value);
+  try {
+    const payload = await api(`/api/v1/search?${params}`);
+    if (requestId === state.globalSearchLoadId) renderGlobalSearchResults(payload);
+  } catch (error) {
+    if (requestId === state.globalSearchLoadId) {
+      els.globalSearchStatus.textContent = `检索失败：${error.message}`;
+      els.globalSearchResults.innerHTML = '';
+    }
+  } finally {
+    if (requestId === state.globalSearchLoadId) els.globalSearchButton.disabled = false;
+  }
 }
 
 function metric(label, value, note = '', small = false) {
@@ -408,6 +605,12 @@ async function loadProject(projectId) {
 
 async function selectProject(projectId) {
   state.selectedProjectId = projectId;
+  els.portfolioNav.classList.remove('active');
+  els.portfolioView.classList.add('hidden');
+  document.getElementById('settings-view')?.classList.add('hidden');
+  document.getElementById('settings-nav')?.classList.remove('active');
+  document.getElementById('intelligence-view')?.classList.add('hidden');
+  document.getElementById('dashboard-view')?.classList.remove('hidden');
   renderProjectList();
   const project = state.projects.find(item => item.project_id === projectId) || {};
   els.title.textContent = projectLabel(project);
@@ -418,13 +621,16 @@ async function selectProject(projectId) {
   els.contributors.innerHTML = '<div class="empty">正在加载人员协作…</div>';
   els.timeline.innerHTML = '<div class="empty">正在加载每周进展…</div>';
   try {
-    state.detail = await loadProject(projectId);
+    const detail = await loadProject(projectId);
+    if (state.selectedProjectId !== projectId) return;
+    state.detail = detail;
     renderOverview(project, state.detail);
     renderTasks(state.detail);
     renderMemory(state.detail);
     renderContributors(state.detail);
     renderTimeline(state.detail);
   } catch (error) {
+    if (state.selectedProjectId !== projectId) return;
     els.overview.innerHTML = metric('项目状态', '加载失败', '请点击“刷新数据”重试', true);
     els.taskTable.innerHTML = '<div class="empty">当前任务加载失败</div>';
     els.projectMemory.innerHTML = '<div class="empty">项目进展加载失败</div>';
@@ -435,15 +641,6 @@ async function selectProject(projectId) {
 }
 
 async function bootstrap() {
-  if (!state.projects.length) {
-    els.projectList.innerHTML = '<div class="empty">正在加载项目…</div>';
-    els.title.textContent = '正在加载项目';
-    els.overview.innerHTML = metric('项目状态', '正在加载', '正在连接项目数据', true);
-    els.taskTable.innerHTML = '<div class="empty">正在加载当前任务…</div>';
-    els.projectMemory.innerHTML = '<div class="empty">正在加载项目进展…</div>';
-    els.contributors.innerHTML = '<div class="empty">正在加载人员协作…</div>';
-    els.timeline.innerHTML = '<div class="empty">正在加载每周进展…</div>';
-  }
   let healthOk = false;
   try {
     await api('/health');
@@ -452,17 +649,10 @@ async function bootstrap() {
     els.apiStateText.textContent = '服务正常';
     state.projects = await api('/api/v1/projects');
     renderProjectList();
-    if (state.projects.length) {
-      const preferred = state.selectedProjectId && state.projects.some(item => item.project_id === state.selectedProjectId)
-        ? state.selectedProjectId
-        : state.projects[0].project_id;
-      await selectProject(preferred);
+    if (state.selectedProjectId && state.projects.some(item => item.project_id === state.selectedProjectId)) {
+      await selectProject(state.selectedProjectId);
     } else {
-      els.overview.innerHTML = metric('项目状态', '暂无项目', '等待项目首次采集', true);
-      els.taskTable.innerHTML = '<div class="empty">暂无任务数据</div>';
-      els.projectMemory.innerHTML = '<div class="empty">暂无项目进展</div>';
-      els.contributors.innerHTML = '<div class="empty">暂无人员数据</div>';
-      els.timeline.innerHTML = '<div class="empty">暂无周度进展</div>';
+      await showPortfolio();
     }
     return true;
   } catch (error) {
@@ -476,6 +666,8 @@ async function bootstrap() {
       els.projectMemory.innerHTML = '<div class="empty">项目进展加载失败</div>';
       els.contributors.innerHTML = '<div class="empty">人员协作加载失败</div>';
       els.timeline.innerHTML = '<div class="empty">每周进展加载失败</div>';
+      els.portfolioStatus.textContent = '项目列表读取失败';
+      els.portfolioGrid.innerHTML = '<div class="portfolio-empty">连接失败，请点击“刷新数据”重试。</div>';
     }
     showToast(`连接服务失败：${error.message}`, true);
     return false;
@@ -488,6 +680,22 @@ els.refresh.addEventListener('click', async () => {
     if (await bootstrap()) showToast('数据已刷新');
   } finally {
     els.refresh.disabled = false;
+  }
+});
+
+els.portfolioNav.addEventListener('click', () => {
+  els.portfolioSearch.value = '';
+  showPortfolio();
+});
+els.portfolioSearch.addEventListener('input', renderPortfolio);
+els.globalSearchButton.addEventListener('click', runGlobalSearch);
+els.globalSearchInput.addEventListener('keydown', event => { if (event.key === 'Enter') runGlobalSearch(); });
+els.portfolioRefresh.addEventListener('click', async () => {
+  els.portfolioRefresh.disabled = true;
+  try {
+    if (await bootstrap()) showToast('数据已刷新');
+  } finally {
+    els.portfolioRefresh.disabled = false;
   }
 });
 

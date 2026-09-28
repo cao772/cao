@@ -65,6 +65,38 @@ def test_business_brief_uses_real_project_facts_and_remote_activity():
     assert brief["summary"]["local_uncommitted_workspace_count"] == 1
 
 
+def test_inferred_stage_exposes_dated_source_without_claiming_test_passed():
+    recorded = snapshot({
+        "tests": [
+            {"text": "问题：总费用取错", "path": "documents/8月问题反馈表.xlsx", "source_date": "2026-08-12"},
+            {"text": "问题：总费用取错", "path": "documents/8月问题反馈表.xlsx", "source_date": "2026-08-12"},
+        ],
+        "progress": [], "tasks": [], "requirements": [], "blockers": [], "decisions": [],
+    })
+    recorded["observed_at"] = "2026-09-28T03:00:00+00:00"
+    brief = build_project_brief([recorded], {"work_items": []})
+
+    assert brief["current_stage"] == "测试与验证"
+    basis = brief["current_stage_basis"]
+    assert basis["method"] == "heuristic"
+    assert len(basis["evidence"]) == 1
+    assert basis["evidence"][0]["path"] == "documents/8月问题反馈表.xlsx"
+    assert basis["evidence"][0]["source_date"] == "2026-08-12"
+    assert basis["evidence"][0]["observed_at"] == recorded["observed_at"]
+
+
+def test_next_step_and_decision_keep_original_material_date():
+    recorded = snapshot({
+        "tests": [], "progress": [], "requirements": [], "blockers": [],
+        "tasks": [{"text": "计划完成回归", "path": "reports/old-weekly.md", "source_date": "2026-08-12"}],
+        "decisions": [{"text": "决定先验证接口", "path": "minutes/meeting.md", "source_date": "2026-09-01"}],
+    })
+    brief = build_project_brief([recorded], {"work_items": []})
+    assert brief["next_step_evidence"][0]["path"] == "reports/old-weekly.md"
+    assert brief["next_step_evidence"][0]["source_date"] == "2026-08-12"
+    assert brief["decision_evidence"][0]["path"] == "minutes/meeting.md"
+
+
 def test_failed_line_is_not_reported_as_completed():
     snapshots = [
         snapshot(

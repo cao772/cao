@@ -6,7 +6,8 @@
   <title>AI 研发协同管理平台</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
-  <link rel="stylesheet" href="/project-intelligence.css" />
+  <link rel="stylesheet" href="/project-intelligence.css?v=p1-evidence-2" />
+  <link rel="stylesheet" href="/portfolio.css?v=p2-global-search-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -20,6 +21,10 @@
       </div>
 
       <div class="sidebar-section-title">项目</div>
+      <button id="portfolio-nav" class="project-item portfolio-nav active" type="button">
+        <span class="name">全部项目</span>
+        <span class="meta"><span>背景与进展总览</span><span>↗</span></span>
+      </button>
       <nav id="project-list" class="project-list"><div class="empty">正在加载项目…</div></nav>
 
       <div class="sidebar-section-title platform-title">平台</div>
@@ -34,7 +39,41 @@
       </div>
     </aside>
 
-    <main id="dashboard-view" class="main">
+    <main id="portfolio-view" class="main portfolio-main">
+      <header class="topbar portfolio-topbar">
+        <div>
+          <div class="eyebrow">PROJECT PORTFOLIO</div>
+          <h2>所有项目，一处看清</h2>
+          <p>从背景与当前阶段出发，快速找到下一步、问题和项目资料。</p>
+        </div>
+        <button id="portfolio-refresh-btn" class="secondary-button" type="button">刷新数据</button>
+      </header>
+      <section id="portfolio-overview" class="portfolio-overview" aria-label="项目组合概况"></section>
+      <section class="portfolio-global-search" aria-label="跨项目检索">
+        <div class="portfolio-search-heading"><h3>跨项目查资料与沟通</h3><p>结果保留项目、原始来源及时间；仅搜索已采集和授权的内容。</p></div>
+        <div class="portfolio-search-controls">
+          <label><span>关键词</span><input id="global-search-input" type="search" placeholder="例如：费用、验收、框架、关键决定" autocomplete="off" /></label>
+          <label><span>项目</span><select id="global-search-project"><option value="">全部项目</option></select></label>
+          <label><span>来源</span><select id="global-search-source"><option value="all">全部来源</option><option value="material">项目材料</option><option value="conversation">授权沟通</option></select></label>
+          <button id="global-search-btn" class="primary-button" type="button">搜索</button>
+        </div>
+        <div id="global-search-status" class="portfolio-search-status" role="status" aria-live="polite">输入关键词开始检索。</div>
+        <div id="global-search-results" class="portfolio-search-results"></div>
+      </section>
+      <div class="portfolio-toolbar">
+        <div>
+          <h3>项目目录</h3>
+          <p id="portfolio-status" role="status" aria-live="polite">正在读取项目…</p>
+        </div>
+        <label class="portfolio-search">
+          <span class="sr-only">搜索项目</span>
+          <input id="portfolio-search" type="search" placeholder="搜索项目、背景或下一步" autocomplete="off" />
+        </label>
+      </div>
+      <section id="portfolio-grid" class="portfolio-grid" aria-label="项目列表"><div class="empty">正在读取项目…</div></section>
+    </main>
+
+    <main id="dashboard-view" class="main hidden">
       <header class="topbar">
         <div>
           <div class="eyebrow">AI DEV MANAGEMENT</div>
@@ -108,6 +147,14 @@
       </header>
 
       <section class="intelligence-stack">
+        <div class="panel dossier-panel">
+          <div class="dossier-header">
+            <div><div class="eyebrow">PROJECT DOSSIER</div><h3>项目档案与依据</h3><p>区分项目登记、资料摘录和自动汇总；保留来源与时间。</p></div>
+            <button id="dossier-settings-btn" class="secondary-button" type="button">修正项目关联</button>
+          </div>
+          <div id="intelligence-dossier" class="dossier-body"><div class="intelligence-empty">正在读取项目依据…</div></div>
+        </div>
+
         <div class="panel intelligence-search-card">
           <div class="intelligence-search-row">
             <label class="intelligence-search-box">
@@ -130,7 +177,7 @@
         <div class="intelligence-overview-grid">
           <div class="panel intelligence-card">
             <div class="intelligence-card-head">
-              <div><h3>这个项目是什么</h3><p>开发侧 AI 的项目认知与平台真实材料联合展示</p></div>
+              <div><h3>详细项目认知</h3><p>查看开发侧记录的当前工作、已知问题与事实候选</p></div>
             </div>
             <div id="intelligence-context"></div>
           </div>
@@ -388,15 +435,15 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js"></script>
-  <script src="/settings.js"></script>
+  <script src="/app.js?v=p2-global-search-1"></script>
+  <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
   <script src="/settings-policy.js"></script>
   <script src="/settings-model.js?v=m7-tracememo-1"></script>
   <script src="/settings-nodes.js"></script>
   <script src="/settings-wechat.js?v=m7-tracememo-1"></script>
-  <script src="/project-intelligence.js"></script>
+  <script src="/project-intelligence.js?v=p1-evidence-2"></script>
   <script src="/project-communications.js"></script>
 </body>
 </html>
