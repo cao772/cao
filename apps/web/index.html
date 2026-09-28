@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
   <link rel="stylesheet" href="/project-intelligence.css" />
+  <link rel="stylesheet" href="/portfolio.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -20,7 +21,11 @@
       </div>
 
       <div class="sidebar-section-title">项目</div>
-      <nav id="project-list" class="project-list"></nav>
+      <button id="portfolio-nav" class="project-item portfolio-nav active" type="button">
+        <span class="name">全部项目</span>
+        <span class="meta"><span>背景与进展总览</span><span>↗</span></span>
+      </button>
+      <nav id="project-list" class="project-list"><div class="empty">正在加载项目…</div></nav>
 
       <div class="sidebar-section-title platform-title">平台</div>
       <button id="settings-nav" class="project-item settings-nav" type="button">
@@ -34,7 +39,30 @@
       </div>
     </aside>
 
-    <main id="dashboard-view" class="main">
+    <main id="portfolio-view" class="main portfolio-main">
+      <header class="topbar portfolio-topbar">
+        <div>
+          <div class="eyebrow">PROJECT PORTFOLIO</div>
+          <h2>所有项目，一处看清</h2>
+          <p>从背景与当前阶段出发，快速找到下一步、问题和项目资料。</p>
+        </div>
+        <button id="portfolio-refresh-btn" class="secondary-button" type="button">刷新数据</button>
+      </header>
+      <section id="portfolio-overview" class="portfolio-overview" aria-label="项目组合概况"></section>
+      <div class="portfolio-toolbar">
+        <div>
+          <h3>项目目录</h3>
+          <p id="portfolio-status" role="status" aria-live="polite">正在读取项目…</p>
+        </div>
+        <label class="portfolio-search">
+          <span class="sr-only">搜索项目</span>
+          <input id="portfolio-search" type="search" placeholder="搜索项目、背景或下一步" autocomplete="off" />
+        </label>
+      </div>
+      <section id="portfolio-grid" class="portfolio-grid" aria-label="项目列表"><div class="empty">正在读取项目…</div></section>
+    </main>
+
+    <main id="dashboard-view" class="main hidden">
       <header class="topbar">
         <div>
           <div class="eyebrow">AI DEV MANAGEMENT</div>
