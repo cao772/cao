@@ -62,13 +62,17 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
     /项目 列表
     /项目 低电压
     /项目 缺陷 问题
+    /项目 缺陷 背景
+    /项目 低电压 材料
+    /项目 缺陷 指标
     /项目 hy-claw 下一步
     /项目 hy-claw 搜索 关键词
     /状态
+    /帮助
     /问 低电压项目现在的主要风险是什么？
     /执行 检查本机研发平台并修复故障
 
-`/问` 从本机 Central 获取相关项目事实，并用已授权的 DeepSeek `deepseek-flash` 回答；只发送选中项目简报与当前问题，不上传整库或其他微信聊天。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在已验证的回信通道就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
+`/项目 … 背景/材料` 从本机项目认知读取背景、代码仓库及当前材料；`/项目 … 搜索` 直接返回匹配材料的文件名、位置、路径与沟通记录摘录。`/问` 从本机 Central 获取相关项目事实，并用已授权的 DeepSeek `deepseek-flash` 回答，附项目简报来源与资料基准日期；只发送选中项目简报与当前问题，不上传整库或其他微信聊天。API Key 保存在私有的 `~/Library/Application Support/AI Dev Management/deepseek-api-key`（`0600`）。`/执行` 使用隔离配置的 Codex CLI + `deepseek-flash` 在本机实际操作，因此仅在已验证的回信通道就绪且指令发送时间不超过 10 分钟时启动，运行中崩溃不会自动重试。首次运行可用 `python3 apps/wechat-mac-helper/command_gateway.py --once` 核验收件、处理和待回复数量。
 
 安装登录常驻：
 
@@ -82,4 +86,4 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
 
     python3 apps/wechat-mac-helper/uninstall_command_gateway.py
 
-收件入口是你自己账号的「文件传输助手」。回复优先通过 TraceMemo Agent Hub 已验证的**测试私聊**发给你；接收者在 `~/Library/Application Support/AI Dev Management/wechat-command-recipient.json` 中固定绑定（`0600`），不会跟随 Agent Hub 的“最后发消息的人”变化。Agent Hub 不在线时，若个人微信发送能力已就绪才走个人账号发送；两者都不可用时保留本机待发队列。当前微信 4.1.13 的个人发送仍不可用，但测试私聊已经实际发通。项目群不会收到这些指令回复。
+收件入口是你自己账号的「文件传输助手」。回复优先通过 TraceMemo Agent Hub 已验证的**测试私聊**发给你；接收者在 `~/Library/Application Support/AI Dev Management/wechat-command-recipient.json` 中固定绑定（`0600`），不会跟随 Agent Hub 的“最后发消息的人”变化。Agent Hub 不在线时，若个人微信发送能力已就绪才走个人账号发送；两者都不可用时保留本机待发队列。机器人明确拒绝的发送最多重试 3 次，间隔至少 60 秒；网络/服务端故障导致发送结果不明时保留待核状态，避免重复发出。当前微信 4.1.13 的个人发送仍不可用，但测试私聊已经实际发通。项目群不会收到这些指令回复。直接在机器人私聊发送的普通文字仍由 TraceMemo 自带聊天查询助手处理，尚未路由到本项目指令网关。

@@ -20,7 +20,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from tracememo_adapter import TraceMemoReader
+from tracememo_adapter import TraceMemoError, TraceMemoReader
 
 STATE_ROOT = Path.home() / "Library/Application Support/AI Dev Management"
 TOKEN_FILE = STATE_ROOT / "tracememo-api-token"
@@ -64,7 +64,8 @@ def open_database(path: Path = DATABASE) -> sqlite3.Connection:
             status TEXT NOT NULL DEFAULT 'pending',
             reply TEXT,
             delivered_at INTEGER,
-            error TEXT
+            error TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS commands_status_idx ON commands(status, created_at);
         CREATE TABLE IF NOT EXISTS gateway_meta (
@@ -73,6 +74,8 @@ def open_database(path: Path = DATABASE) -> sqlite3.Connection:
         );
         """
     )
+    if "attempts" not in {row[1] for row in conn.execute("PRAGMA table_info(commands)")}:
+        conn.execute("ALTER TABLE commands ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 
@@ -94,7 +97,9 @@ def accept_message(message: dict[str, Any]) -> bool:
     return (
         message.get("isSender") is True
         and message.get("type") == "普通文本"
-        and text.startswith(("/项目", "/问 ", "/执行 ", "/状态"))
+        and (text == "/项目" or text.startswith("/项目 ")
+             or text.startswith(("/问 ", "/执行 "))
+             or text in {"/状态", "/帮助"})
         and len(text) <= 2000
     )
 
@@ -160,32 +165,132 @@ def _lines(label: str, items: Any, limit: int = 3) -> list[str]:
     values = []
     for item in items[:limit]:
         if isinstance(item, str):
-            values.append(item.lstrip("- ").strip())
+            values.append(_short(item.lstrip("- ").strip(), 200))
         elif isinstance(item, dict):
-            values.append(str(item.get("title") or item.get("summary") or item.get("text") or "").strip())
+            values.append(_short(item.get("title") or item.get("summary") or item.get("text"), 200))
     return [f"{label}：" + "；".join(x for x in values if x)] if any(values) else []
 
 
+def _short(value: Any, limit: int = 110) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _project_action(command: str, projects: list[dict[str, Any]]) -> tuple[str, str]:
+    """Resolve full project names and aliases before splitting off the action."""
+    remaining = command[len("/项目"):].strip()
+    aliases = {"缺陷": "power-defect-agent", "低电压": "low-voltage",
+               "HY CLAW": "hy-claw", "HyClaw": "hy-claw", "本地部署": "hyclaw-local-agent"}
+    candidates = [(str(p.get("project_id") or ""), str(p.get("project_id") or "")) for p in projects]
+    candidates += [(str(p.get("project_name") or ""), str(p.get("project_id") or "")) for p in projects]
+    candidates += list(aliases.items())
+    for label, project_id in sorted(candidates, key=lambda pair: len(pair[0]), reverse=True):
+        if label and remaining.casefold().startswith(label.casefold()):
+            tail = remaining[len(label):]
+            if not tail or tail[0].isspace():
+                return project_id, tail.strip() or "概览"
+    first, _, action = remaining.partition(" ")
+    return _project_id(first, projects), action.strip() or "概览"
+
+
+def _search_reply(name: str, result: dict[str, Any]) -> str:
+    materials = result.get("results") or []
+    conversations = result.get("communications") or []
+    if not isinstance(materials, list) or not isinstance(conversations, list):
+        raise ValueError("搜索结果格式错误")
+    lines = [f"{name}：找到 {result.get('count', 0)} 条（材料 {result.get('material_count', 0)}，沟通 {result.get('communication_count', 0)}）"]
+    for item in materials[:3]:
+        if not isinstance(item, dict):
+            continue
+        material = item.get("material") or {}
+        if not isinstance(material, dict):
+            continue
+        title = _short(material.get("name") or material.get("path") or "未命名材料", 85)
+        kind = _short(material.get("material_type_label") or "资料", 20)
+        location = _short(item.get("locator"), 35)
+        lines.append(f"资料｜{title}（{kind}{' · ' + location if location else ''}）")
+        snippet = _short(item.get("snippet"), 130)
+        if snippet:
+            lines.append(f"  {snippet}")
+        path = _short(material.get("path"), 150)
+        if path:
+            lines.append(f"  来源：{path}")
+    for item in conversations[:2]:
+        if not isinstance(item, dict):
+            continue
+        origin = _short(item.get("conversation_name") or "项目沟通", 35)
+        date = str(item.get("observed_at") or "")[:16].replace("T", " ")
+        lines.append(f"沟通｜{origin}{' · ' + date if date else ''}")
+        lines.append("  " + _short(item.get("text"), 130))
+    if len(lines) == 1:
+        lines.append("暂无匹配资料或沟通记录。")
+    return "\n".join(lines)[:1700]
+
+
+def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
+    profile = result.get("profile") or {}
+    context = result.get("context") or {}
+    summary = result.get("summary") or {}
+    if not all(isinstance(value, dict) for value in (profile, context, summary)):
+        raise ValueError("项目认知格式错误")
+    if action == "背景":
+        project = context.get("project") or {}
+        if not isinstance(project, dict):
+            project = {}
+        purpose = project.get("purpose") or project.get("description") or profile.get("description")
+        lines = [name, "背景：" + _short(purpose or "尚未录入可确认的项目背景。", 350)]
+        stage = project.get("current_stage") or (result.get("progress") or {}).get("current_stage")
+        if stage:
+            lines.append("阶段：" + _short(stage, 100))
+        repositories = profile.get("repositories") or []
+        for repo in repositories[:3]:
+            if isinstance(repo, dict):
+                lines.append("代码：" + _short(repo.get("url") or repo.get("id"), 160))
+        lines.append("资料：" + str(summary.get("material_count") or 0) + " 份")
+        return "\n".join(lines)[:1700]
+    materials = result.get("materials") or []
+    if not isinstance(materials, list):
+        raise ValueError("项目材料格式错误")
+    current = [m for m in materials if isinstance(m, dict) and m.get("version_status") in
+               {"current", "latest_period", "primary", "active_related", "single"}]
+    listed = sorted(current or [m for m in materials if isinstance(m, dict)],
+                    key=lambda m: str(m.get("modified_at") or ""), reverse=True)[:5]
+    lines = [f"{name}：已识别 {summary.get('material_count', len(materials))} 份资料，以下为当前/最新材料："]
+    for material in listed:
+        lines.append(f"• {_short(material.get('name') or material.get('path'), 95)}"
+                     f"（{_short(material.get('material_type_label') or '资料', 20)}）")
+        if material.get("summary"):
+            lines.append("  " + _short(material["summary"], 110))
+        if material.get("path"):
+            lines.append("  来源：" + _short(material["path"], 150))
+    if not listed:
+        lines.append("尚未识别到项目材料。")
+    return "\n".join(lines)[:1700]
+
+
 def project_command(command: str) -> str:
-    parts = command.split(maxsplit=2)
     projects = _projects()
-    if len(parts) == 1 or parts[1] in {"列表", "项目"}:
+    if command.strip() in {"/项目", "/项目 列表", "/项目 项目"}:
         return "已纳管项目：\n" + "\n".join(
             f"• {item.get('project_name') or item.get('project_id')} ({item.get('project_id')})"
             for item in projects
         )
-    project_id = _project_id(parts[1], projects)
+    project_id, action = _project_action(command, projects)
     name = next((str(p.get("project_name") or project_id) for p in projects if p.get("project_id") == project_id), project_id)
-    action = parts[2].strip() if len(parts) > 2 else "概览"
     if action.startswith("搜索 "):
         from urllib.parse import urlencode
 
         result = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/search?" + urlencode({"q": action[3:].strip(), "limit": 5}))
         if not isinstance(result, dict):
             raise ValueError("搜索结果格式错误")
-        return f"{name}：找到 {result.get('count', 0)} 条相关资料或沟通记录。请在研发平台打开项目搜索查看来源。"
-    if action not in {"概览", "进度", "问题", "下一步", "任务"}:
-        return "可用命令：/项目 列表；/项目 低电压；/项目 缺陷 问题；/项目 hy-claw 搜索 关键词"
+        return _search_reply(name, result)
+    if action in {"背景", "材料"}:
+        intelligence = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/intelligence")
+        if not isinstance(intelligence, dict):
+            raise ValueError("项目认知格式错误")
+        return _intelligence_reply(name, action, intelligence)
+    if action not in {"概览", "进度", "问题", "下一步", "任务", "指标"}:
+        return "可用命令：/项目 列表；/项目 缺陷 背景；/项目 低电压 材料；/项目 hy-claw 搜索 关键词；/帮助"
     result = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/brief")
     if not isinstance(result, dict):
         raise ValueError("项目简报格式错误")
@@ -200,7 +305,14 @@ def project_command(command: str) -> str:
     if action == "任务":
         summary = result.get("summary") or {}
         lines.append(f"任务：进行中 {summary.get('in_progress_task_count', 0)}，已完成 {summary.get('completed_task_count', 0)}，待处理 {summary.get('attention_task_count', 0)}")
-    return "\n".join(lines)
+    if action in {"概览", "进度", "指标"}:
+        lines += _lines("指标", result.get("latest_metrics"))
+    if action == "指标" and len(lines) == 2:
+        lines.append("暂无可确认的最新指标。")
+    source = result.get("source_status") or {}
+    if isinstance(source, dict) and source.get("freshness_reference_date"):
+        lines.append("资料基准：" + str(source["freshness_reference_date"])[:10])
+    return "\n".join(lines)[:1700]
 
 
 def codex_command(command: str, *, readonly: bool) -> str:
@@ -276,15 +388,17 @@ def project_question(command: str) -> str:
         facts.append({
             "project_id": project_id,
             "project_name": project.get("project_name"),
-            **{key: brief.get(key) for key in ("current_stage", "completed", "in_progress", "issues", "next_steps", "latest_metrics", "summary")},
+            **{key: brief.get(key) for key in ("current_stage", "completed", "in_progress", "issues", "next_steps", "latest_metrics", "summary", "source_status")},
         })
+    if not facts:
+        return "本机研发平台尚无可核对的项目简报，暂时无法回答。"
     key = DEEPSEEK_KEY_FILE.read_text(encoding="utf-8").strip()
     if not key:
         raise ValueError("DeepSeek API Key 未配置")
     payload = {
         "model": "deepseek-flash",
         "messages": [
-            {"role": "system", "content": "你是用户的研发项目助手。只根据附带的本机项目事实回答；区分已完成、进行中、问题和推断。资料没有的信息明确说不知道。用简洁中文回答，不泄露密钥。"},
+            {"role": "system", "content": "你是用户的研发项目助手。只根据附带的本机项目事实回答；区分已完成、进行中、问题和推断。资料没有的信息明确说不知道。留意 source_status.freshness_reference_date，不能把旧资料冒充今天进度。每个项目的事实写出对应 project_id。用简洁中文回答，不泄露密钥。"},
             {"role": "user", "content": "问题：" + question + "\n\n本机研发平台事实：" + json.dumps(facts, ensure_ascii=False)[:24000]},
         ],
         "max_tokens": 900,
@@ -297,7 +411,31 @@ def project_question(command: str) -> str:
     reply = str((result["choices"][0].get("message") or {}).get("content") or "").strip()
     if not reply:
         raise ValueError("DeepSeek 未返回答案")
-    return reply[:1800]
+    sources = "、".join(
+        str(fact["project_id"]) + (
+            "（资料基准 " + str((fact.get("source_status") or {}).get("freshness_reference_date"))[:10] + "）"
+            if (fact.get("source_status") or {}).get("freshness_reference_date") else ""
+        ) for fact in facts
+    )
+    return reply[:1450] + "\n依据：本机研发平台项目简报 " + sources[:280]
+
+
+def status_command() -> str:
+    try:
+        central = _json_request(f"{CENTRAL}/health")
+        central_status = "正常" if isinstance(central, dict) and central.get("status") == "ok" else "异常"
+    except (OSError, urllib.error.URLError, ValueError):
+        central_status = "未连接"
+    try:
+        reader_status = "已连接" if TraceMemoReader(TOKEN_FILE).is_ready() else "未就绪"
+    except (OSError, urllib.error.URLError, ValueError, TraceMemoError):
+        reader_status = "未连接"
+    try:
+        token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+        sender_status = "已连接" if bot_recipient(token) else "未连接"
+    except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+        sender_status = "未连接"
+    return f"本机研发平台：{central_status}\n微信读取：{reader_status}\n测试私聊回复：{sender_status}"
 
 
 def execute(command: str) -> str:
@@ -308,7 +446,13 @@ def execute(command: str) -> str:
     if command.startswith("/执行 "):
         return codex_command(command, readonly=False)
     if command == "/状态":
-        return "项目助手已收到你的微信指令；项目数据来自本机研发平台。"
+        return status_command()
+    if command == "/帮助":
+        return ("请在你自己微信的「文件传输助手」发送指令，结果会回到当前测试私聊：\n"
+                "/项目 列表\n/项目 缺陷 背景\n/项目 低电压 材料\n"
+                "/项目 HY CLAW 进度\n/项目 缺陷 搜索 关键词\n"
+                "/问 HY CLAW 现在做到哪了？\n/状态\n/执行 具体任务\n"
+                "当前这个 TraceMemo 机器人自身的聊天问答与项目指令入口尚未打通。")
     return "未识别命令。"
 
 
@@ -369,24 +513,39 @@ def bot_recipient(token: str) -> str | None:
 
 
 def deliver_pending_bot(conn: sqlite3.Connection, token: str, recipient: str) -> int:
+    now = int(time.time())
     rows = conn.execute(
-        "SELECT message_id,reply FROM commands WHERE status='awaiting_send' ORDER BY created_at,message_id"
+        "SELECT message_id,reply FROM commands WHERE status='awaiting_send' "
+        "OR (status='bot_failed' AND attempts<3 AND delivered_at<=?) "
+        "ORDER BY created_at,message_id",
+        (now - 60,),
     ).fetchall()
     sent = 0
     for row in rows:
         claimed = conn.execute(
-            "UPDATE commands SET status='bot_requested',delivered_at=? "
-            "WHERE message_id=? AND status='awaiting_send'",
-            (int(time.time()), row["message_id"]),
+            "UPDATE commands SET status='bot_requested',delivered_at=?,attempts=attempts+1 "
+            "WHERE message_id=? AND (status='awaiting_send' OR "
+            "(status='bot_failed' AND attempts<3 AND delivered_at<=?))",
+            (now, row["message_id"], now - 60),
         )
         conn.commit()
         if claimed.rowcount != 1:
             continue
-        result = _json_request(
-            f"{TRACE_MEMO}/api/v1/agent/send",
-            token=token,
-            body={"to": recipient, "text": PREFIX + "\n" + str(row["reply"] or "")[:1800]},
-        )
+        try:
+            result = _json_request(
+                f"{TRACE_MEMO}/api/v1/agent/send",
+                token=token,
+                body={"to": recipient, "text": PREFIX + "\n" + str(row["reply"] or "")[:1800]},
+            )
+        except urllib.error.HTTPError as exc:
+            if not 400 <= exc.code < 500:
+                raise  # Server/network failure may have sent the message; do not retry blindly.
+            conn.execute(
+                "UPDATE commands SET status='bot_failed',error=? WHERE message_id=?",
+                (f"agent_hub_http_{exc.code}", row["message_id"]),
+            )
+            conn.commit()
+            break
         if not isinstance(result, dict) or result.get("success") is not True or result.get("status") != "sent":
             conn.execute(
                 "UPDATE commands SET status='bot_failed',error='agent_hub_rejected' WHERE message_id=?",

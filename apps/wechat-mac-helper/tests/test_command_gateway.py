@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -42,6 +43,7 @@ class CommandGatewayTests(unittest.TestCase):
             {"serverId": "1", "createTime": 1000, "content": "/项目 列表", "type": "普通文本", "isSender": True},
             {"serverId": "2", "createTime": 1000, "content": "/执行 删除文件", "type": "普通文本", "isSender": False},
             {"serverId": "3", "createTime": 1000, "content": "【项目助手】\n回复", "type": "普通文本", "isSender": True},
+            {"serverId": "4", "createTime": 1000, "content": "/状态无效", "type": "普通文本", "isSender": True},
         ]
         reader = Reader(messages)
         self.assertEqual(gateway.ingest(self.conn, reader, now=1010), 1)
@@ -87,12 +89,55 @@ class CommandGatewayTests(unittest.TestCase):
         ]
         with patch.object(gateway, "DEEPSEEK_KEY_FILE", key_file), patch.object(gateway, "_projects", return_value=projects), patch.object(gateway, "_json_request", side_effect=request):
             answer = gateway.project_question("/问 缺陷项目有什么问题？")
-        self.assertEqual(answer, "缺陷项目处于验证阶段。")
+        self.assertIn("缺陷项目处于验证阶段。", answer)
+        self.assertIn("依据：本机研发平台项目简报 power-defect-agent", answer)
         self.assertEqual(len(calls), 2)
         self.assertIn("power-defect-agent/brief", calls[0][0])
         self.assertNotIn("low-voltage", str(calls))
         self.assertEqual(calls[1][1], "test-key")
         self.assertEqual(calls[1][2]["model"], "deepseek-flash")
+
+    def test_project_search_returns_material_and_wechat_sources(self):
+        projects = [{"project_id": "hy-claw", "project_name": "HY CLAW 内研"}]
+
+        def request(url, *, token=None, body=None):
+            self.assertIn("/hy-claw/search?", url)
+            return {
+                "count": 2, "material_count": 1, "communication_count": 1,
+                "results": [{"material": {"name": "需求清单.xlsx", "path": "资料/需求清单.xlsx",
+                                           "material_type_label": "需求与需求说明"},
+                             "locator": "Sheet1 A3", "snippet": "新增项目进度查询"}],
+                "communications": [{"conversation_name": "HY CLAW 内研", "observed_at": "2026-09-27T10:30:00+08:00",
+                                    "text": "项目进度查询已确认"}],
+            }
+
+        with patch.object(gateway, "_projects", return_value=projects), patch.object(gateway, "_json_request", side_effect=request):
+            reply = gateway.project_command("/项目 HY CLAW 内研 搜索 项目进度")
+        self.assertIn("需求清单.xlsx", reply)
+        self.assertIn("Sheet1 A3", reply)
+        self.assertIn("来源：资料/需求清单.xlsx", reply)
+        self.assertIn("HY CLAW 内研 · 2026-09-27 10:30", reply)
+        self.assertIn("项目进度查询已确认", reply)
+
+    def test_project_background_and_materials_use_intelligence(self):
+        projects = [{"project_id": "low-voltage", "project_name": "低电压治理"}]
+        intelligence = {
+            "profile": {"description": "配网低电压治理审查", "repositories": [{"url": "https://example.invalid/repo"}]},
+            "context": {"project": {"current_stage": "测试与验证"}},
+            "summary": {"material_count": 2},
+            "materials": [
+                {"name": "新版可研.pdf", "path": "资料/新版可研.pdf", "modified_at": "2026-09-27",
+                 "material_type_label": "需求与需求说明", "version_status": "current", "summary": "新增了审查说明"},
+                {"name": "旧版可研.pdf", "version_status": "historical"},
+            ],
+        }
+        with patch.object(gateway, "_projects", return_value=projects), patch.object(gateway, "_json_request", return_value=intelligence):
+            background = gateway.project_command("/项目 低电压 背景")
+            materials = gateway.project_command("/项目 低电压 材料")
+        self.assertIn("配网低电压治理审查", background)
+        self.assertIn("https://example.invalid/repo", background)
+        self.assertIn("新版可研.pdf", materials)
+        self.assertNotIn("旧版可研.pdf", materials)
 
     def test_send_is_only_confirmed_by_personal_chatlog(self):
         self.conn.execute(
@@ -143,6 +188,57 @@ class CommandGatewayTests(unittest.TestCase):
             self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", recipient), 0)
             self.assertEqual(send.call_count, 2)
         self.assertEqual(self.conn.execute("SELECT status FROM commands").fetchone()[0], "sent_bot")
+
+    def test_explicit_bot_rejection_retries_with_backoff_and_limit(self):
+        self.conn.execute(
+            "INSERT INTO commands(message_id,created_at,command,status,reply) "
+            "VALUES('1',1000,'/状态','awaiting_send','正常')"
+        )
+        self.conn.commit()
+        with patch.object(gateway, "_json_request", return_value={"success": False, "status": "rejected"}) as request, \
+                patch.object(gateway.time, "time", return_value=2000):
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat"), 0)
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat"), 0)
+            request.assert_called_once()
+        with patch.object(gateway, "_json_request", return_value={"success": False, "status": "rejected"}) as request, \
+                patch.object(gateway.time, "time", return_value=2061):
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat"), 0)
+            request.assert_called_once()
+        with patch.object(gateway, "_json_request", return_value={"success": False, "status": "rejected"}) as request, \
+                patch.object(gateway.time, "time", return_value=2122):
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat"), 0)
+            request.assert_called_once()
+        with patch.object(gateway, "_json_request", return_value={"success": True, "status": "sent"}) as request, \
+                patch.object(gateway.time, "time", return_value=2200):
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat"), 0)
+            request.assert_not_called()
+        row = self.conn.execute("SELECT status,attempts FROM commands WHERE message_id='1'").fetchone()
+        self.assertEqual((row["status"], row["attempts"]), ("bot_failed", 3))
+
+    def test_existing_queue_gets_attempts_column_without_losing_commands(self):
+        path = Path(self.temp.name) / "old.sqlite3"
+        with sqlite3.connect(path) as old:
+            old.execute("CREATE TABLE commands (message_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, command TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', reply TEXT, delivered_at INTEGER, error TEXT)")
+            old.execute("INSERT INTO commands(message_id,created_at,command) VALUES('old',1000,'/项目 列表')")
+        with gateway.open_database(path) as migrated:
+            row = migrated.execute("SELECT command,attempts FROM commands WHERE message_id='old'").fetchone()
+            self.assertEqual((row["command"], row["attempts"]), ("/项目 列表", 0))
+
+    def test_http_rejection_is_retryable_but_server_error_is_uncertain(self):
+        self.conn.execute("INSERT INTO commands(message_id,created_at,command,status,reply) VALUES('1',1000,'/状态','awaiting_send','正常')")
+        self.conn.commit()
+        rejected = gateway.urllib.error.HTTPError("http://127.0.0.1", 429, "rate limited", {}, None)
+        with patch.object(gateway, "_json_request", side_effect=rejected):
+            self.assertEqual(gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat"), 0)
+        self.assertEqual(self.conn.execute("SELECT status FROM commands WHERE message_id='1'").fetchone()[0], "bot_failed")
+
+        self.conn.execute("UPDATE commands SET status='awaiting_send' WHERE message_id='1'")
+        self.conn.commit()
+        uncertain = gateway.urllib.error.HTTPError("http://127.0.0.1", 500, "server error", {}, None)
+        with patch.object(gateway, "_json_request", side_effect=uncertain):
+            with self.assertRaises(gateway.urllib.error.HTTPError):
+                gateway.deliver_pending_bot(self.conn, "token", "owner@im.wechat")
+        self.assertEqual(self.conn.execute("SELECT status FROM commands WHERE message_id='1'").fetchone()[0], "bot_requested")
 
 
 if __name__ == "__main__":
