@@ -192,7 +192,7 @@ function showIntelligenceView() {
   document.getElementById('dashboard-view')?.classList.add('hidden');
   intelligenceEls.view?.classList.remove('hidden');
   const projectId = state.selectedProjectId;
-  loadProjectIntelligence(projectId).catch(error => {
+  return loadProjectIntelligence(projectId).catch(error => {
     if (intelligenceState.projectId !== projectId) return;
     intelligenceEls.status.textContent = '加载失败';
     intelligenceEls.status.className = 'badge bad';
