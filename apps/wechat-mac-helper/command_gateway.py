@@ -760,6 +760,10 @@ def run_once(conn: sqlite3.Connection) -> dict[str, int]:
         recipient = bot_recipient(token)
     except (OSError, urllib.error.URLError, ValueError, json.JSONDecodeError):
         recipient = None
+    for key, value in {"reply_route": "bound_test_private_chat" if recipient else ("filehelper" if personal_ready else "unavailable"),
+                       "route_checked_at": str(int(time.time()))}.items():
+        conn.execute("INSERT INTO gateway_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+    conn.commit()
     processed = process_pending(conn, sender_ready=bool(recipient) or personal_ready)
     try:
         if recipient:
@@ -789,10 +793,16 @@ def main() -> int:
     while True:
         try:
             result = run_once(conn)
+            for key, value in {"last_cycle_ok": str(int(time.time())), "last_error": ""}.items():
+                conn.execute("INSERT INTO gateway_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+            conn.commit()
             if args.once:
                 print(json.dumps(result, ensure_ascii=False))
                 return 0
         except Exception as exc:
+            for key, value in {"last_error": type(exc).__name__, "last_error_at": str(int(time.time()))}.items():
+                conn.execute("INSERT INTO gateway_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+            conn.commit()
             if args.once:
                 raise
             print(json.dumps({"error": type(exc).__name__}), flush=True)

@@ -88,3 +88,5 @@ LaunchAgent 需读取私有 Token 文件，无需 macOS Accessibility 权限。
     python3 apps/wechat-mac-helper/uninstall_command_gateway.py
 
 收件入口是你自己账号的「文件传输助手」。回复优先通过 TraceMemo Agent Hub 已验证的**测试私聊**发给你；接收者在 `~/Library/Application Support/AI Dev Management/wechat-command-recipient.json` 中固定绑定（`0600`），不会跟随 Agent Hub 的“最后发消息的人”变化。Agent Hub 不在线时，若个人微信发送能力已就绪才走个人账号发送；两者都不可用时保留本机待发队列。机器人明确拒绝的发送最多重试 3 次，间隔至少 60 秒；网络/服务端故障导致发送结果不明时保留待核状态，避免重复发出。当前微信 4.1.13 的个人发送仍不可用，但测试私聊已经实际发通。项目群不会收到这些指令回复。直接在机器人私聊发送的普通文字仍由 TraceMemo 自带聊天查询助手处理，尚未路由到本项目指令网关。
+
+平台配置中的微信指令状态从 `GET /api/v1/wechat/gateway-status` 读取，仅返回计数、时间与回复通道类型，不返回命令正文、回复内容或接收者标识。最近轮询超过 90 秒显示过期；页面可见时每 30 秒刷新。`sent_bot` 仅表示接口发送成功，不能作为手机已读证明。

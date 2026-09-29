@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from wechat_core import SeenState, classify_message, event_fingerprint, next_run_at, normalize_config, scheduled_slot
+from gateway_diagnostics import gateway_diagnostics
 from tracememo_adapter import TraceMemoError, TraceMemoReader, extract_message, resolve_bound_group
 
 STATE_ROOT = Path(
@@ -488,3 +489,8 @@ def get_accessibility_snapshot(
 @app.post("/api/v1/wechat/scan")
 def scan_now() -> dict[str, Any]:
     return collect_authorized_groups(load_config())
+
+
+@app.get("/api/v1/wechat/gateway-status")
+def get_gateway_status() -> dict[str, Any]:
+    return gateway_diagnostics(STATE_ROOT / "wechat-command-gateway.sqlite3")

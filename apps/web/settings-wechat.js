@@ -54,6 +54,7 @@ function ensureWeChatSettingsCard() {
     '<div class="wechat-note">宿主机助手只监听 127.0.0.1:6412，通过 TraceMemo 本地接口仅读取已绑定群的文本、引用和文件标题；不会操作微信界面，也不会上传媒体文件。</div>' +
     '<div class="settings-actions right-actions"><button id="wechat-refresh-btn" class="secondary-button" type="button">刷新状态</button>' +
     '<button id="wechat-scan-btn" class="secondary-button" type="button">立即采集</button><button id="wechat-save-btn" class="primary-button" type="button">保存微信群绑定</button></div>' +
+    '<div id="wechat-gateway-status" class="wechat-note" role="status">正在读取指令通道状态…</div>' +
     '<div id="wechat-message" class="inline-message"></div>';
 
   const localCard = Array.from(stack.children).find(function(item) { return item.querySelector && item.querySelector("#local-control-state"); });
@@ -111,6 +112,7 @@ function setWeChatMessage(text, error) {
 
 async function loadWeChatConfig(showMessage) {
   renderWeChatProjects();
+  await loadWeChatGatewayStatus();
   try {
     const values = await Promise.all([wechatApi("/health"), wechatApi("/api/v1/wechat/config")]);
     const health = values[0], config = values[1];
@@ -120,7 +122,7 @@ async function loadWeChatConfig(showMessage) {
     const available = Boolean(health.wechat && health.wechat.available);
     const captureMode = health.wechat && health.wechat.capture_mode;
     const captureReady = available && captureMode === "tracememo_local_api";
-    wechatEls.state.textContent = captureReady ? "微信采集就绪" : "助手在线，微信数据源未就绪";
+    wechatEls.state.textContent = captureReady ? "本地聊天库可读" : "助手在线，微信数据源未就绪";
     wechatEls.state.className = "connection-state " + (captureReady ? "ok" : (available ? "" : "error"));
     if (showMessage) {
       setWeChatMessage(captureReady ? "TraceMemo 本地接口已连接，已加载授权群绑定。" : "宿主机助手已启动：" + ((health.wechat && health.wechat.reason) || "微信暂不可读取"), !captureReady);
@@ -184,3 +186,26 @@ loadSettings = async function loadSettingsWithWeChat() {
   await loadSettingsBeforeWeChat();
   await loadWeChatConfig(false);
 };
+
+async function loadWeChatGatewayStatus() {
+  const target = document.getElementById("wechat-gateway-status");
+  if (!target) return;
+  try {
+    const data = await wechatApi("/api/v1/wechat/gateway-status");
+    const states = {recently_polled:"最近轮询正常", stale:"轮询状态已过期", error:"最近轮询失败", not_initialized:"尚未启用", unavailable:"状态不可读"};
+    const routes = {bound_test_private_chat:"已绑定的测试私聊", filehelper:"文件传输助手", unavailable:"暂无可用回复通道", unknown:"待检测"};
+    const counts = data.counts || {};
+    const pending = ["pending", "running", "awaiting_send"].reduce((sum, key) => sum + (counts[key] || 0), 0);
+    const uncertain = ["send_requested", "bot_requested", "bot_failed", "send_failed"].reduce((sum, key) => sum + (counts[key] || 0), 0);
+    const latest = data.latest_command_at ? new Date(data.latest_command_at * 1000).toLocaleString("zh-CN") : "尚未收到指令";
+    target.textContent = "微信指令：" + (states[data.state] || "未知") + "。入口：本人文件传输助手；回复：" + (routes[data.reply_route] || "待检测") +
+      "。最近指令：" + latest + "；待处理 " + pending + "，待核对发送结果 " + uncertain + "。本地库可读不代表微信已登录或消息已同步；接口发送成功也不代表手机已读。";
+  } catch (error) {
+    target.textContent = "微信指令状态暂不可用。请检查本机助手版本与运行状态。";
+  }
+}
+
+setInterval(function() {
+  const view = document.getElementById("settings-view");
+  if (!document.hidden && view && !view.classList.contains("hidden")) loadWeChatGatewayStatus();
+}, 30000);
