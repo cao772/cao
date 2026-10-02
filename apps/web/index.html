@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
   <link rel="stylesheet" href="/project-intelligence.css?v=p1-evidence-2" />
-  <link rel="stylesheet" href="/portfolio.css?v=p2-global-search-1" />
+  <link rel="stylesheet" href="/portfolio.css?v=p3-offline-product-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -49,8 +49,12 @@
         <button id="portfolio-refresh-btn" class="secondary-button" type="button">刷新数据</button>
       </header>
       <section id="portfolio-overview" class="portfolio-overview" aria-label="项目组合概况"></section>
+      <section class="daily-focus" aria-label="今日关注">
+        <div class="portfolio-search-heading"><h3>今天先关注什么 <small id="daily-focus-date"></small></h3><p>依据已采集资料整理，按来源异常、问题、下一步和资料时效排列；不代表今天新发生，也不自动代你执行。</p></div>
+        <div id="daily-focus-items" class="daily-focus-grid"><p class="muted">正在整理待关注事项…</p></div>
+      </section>
       <section class="portfolio-global-search" aria-label="跨项目检索">
-        <div class="portfolio-search-heading"><h3>跨项目查资料与沟通</h3><p>结果保留项目、原始来源及时间；仅搜索已采集和授权的内容。</p></div>
+        <div class="portfolio-search-heading"><h3>跨项目查资料与沟通</h3><p>无需配置模型，即可检索已采集材料与授权沟通；保留来源及时间。⌘ / Ctrl + K 快速搜索。</p></div>
         <div class="portfolio-search-controls">
           <label><span>关键词</span><input id="global-search-input" type="search" placeholder="例如：费用、验收、框架、关键决定" autocomplete="off" /></label>
           <label><span>项目</span><select id="global-search-project"><option value="">全部项目</option></select></label>
@@ -70,6 +74,11 @@
           <input id="portfolio-search" type="search" placeholder="搜索项目、背景或下一步" autocomplete="off" />
         </label>
       </div>
+      <div class="portfolio-filters">
+        <label><input id="portfolio-attention" type="checkbox" /> 只看待关注（问题或读取异常）</label>
+        <label>排序 <select id="portfolio-sort"><option value="issues">问题优先</option><option value="recent">最近采集</option><option value="name">项目名称</option></select></label>
+        <span id="portfolio-match-count" role="status"></span>
+      </div>
       <section id="portfolio-grid" class="portfolio-grid" aria-label="项目列表"><div class="empty">正在读取项目…</div></section>
     </main>
 
@@ -81,6 +90,7 @@
           <p id="project-subtitle"></p>
         </div>
         <div class="topbar-actions">
+          <button id="copy-project-brief" class="secondary-button" type="button">复制项目简报</button>
           <button id="project-intelligence-btn" class="secondary-button" type="button">项目认知</button>
           <button id="refresh-btn" class="secondary-button" type="button">刷新数据</button>
         </div>
@@ -435,7 +445,7 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=p2-global-search-1"></script>
+  <script src="/app.js?v=p3-offline-product-1"></script>
   <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
