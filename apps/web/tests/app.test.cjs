@@ -94,3 +94,10 @@ test('damaged browser state is safely ignored and invalid actions are rejected',
   assert.equal(Object.keys(c.readFocusTracking()).length, 0);
   assert.throws(() => c.saveFocusTracking('bad-id', 'done'), /invalid/);
 });
+
+test('search highlights literal matches without injecting source HTML or interpreting regex', () => {
+  const c = app(async () => response({}));
+  assert.equal(c.highlightEvidence('<script>TS-999</script>', 'TS-999'), '&lt;script&gt;<mark>TS-999</mark>&lt;/script&gt;');
+  assert.equal(c.highlightEvidence('env_file a.b acb', 'a.b'), 'env_file <mark>a.b</mark> acb');
+  assert.equal(c.highlightEvidence('缺陷处置', '缺陷'), '<mark>缺陷</mark>处置');
+});

@@ -47,6 +47,7 @@ jobs:
           node --check apps/web/settings-wechat.js
           node --check apps/web/project-intelligence.js
           node --check apps/web/project-communications.js
+          node --test apps/web/tests/app.test.cjs
 
       - name: Validate configs
         env:

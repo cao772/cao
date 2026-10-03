@@ -356,14 +356,28 @@ function showPortfolio() {
   });
 }
 
+function highlightEvidence(value, query) {
+  const text = String(value || '');
+  const terms = [...new Set(String(query || '').trim().split(/\s+/).filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (!terms.length) return escapeHtml(text);
+  const expression = new RegExp(terms.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+  let html = '', cursor = 0;
+  for (const match of text.matchAll(expression)) {
+    html += escapeHtml(text.slice(cursor, match.index)) + `<mark>${escapeHtml(match[0])}</mark>`;
+    cursor = match.index + match[0].length;
+  }
+  return html + escapeHtml(text.slice(cursor));
+}
+
 function renderGlobalSearchResults(payload) {
   const results = payload.results || [];
   const unavailable = payload.unavailable_projects || [];
   els.globalSearchStatus.textContent = `找到 ${payload.count || 0} 项${results.length < (payload.count || 0) ? `，显示前 ${results.length} 项` : ''}。${payload.conversation_available === false ? ' 授权沟通尚未接入此部署。' : ''}${unavailable.length ? ` ${unavailable.length} 个项目暂时无法检索。` : ''}`;
   els.globalSearchResults.innerHTML = results.length ? results.map((item, index) => `
     <article class="portfolio-search-hit">
-      <strong>${escapeHtml(item.project_name)} · ${escapeHtml(item.source_name || '未命名来源')}</strong>
-      ${item.snippet ? `<p>${escapeHtml(item.snippet)}</p>` : ''}
+      <strong>${escapeHtml(item.project_name)} · ${highlightEvidence(item.source_name || '未命名来源', payload.query)}</strong>
+      ${item.snippet ? `<p>${highlightEvidence(item.snippet, payload.query)}</p>` : ''}
+      ${item.matched_fields?.length ? `<small>命中：${escapeHtml(item.matched_fields.join('、'))}${item.locator ? ` · 位置：${escapeHtml(typeof item.locator === 'object' ? JSON.stringify(item.locator) : item.locator)}` : ''}</small>` : ''}
       <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
       <button type="button" data-global-search-open="${index}">在项目中查看</button>
     </article>`).join('') : '<div class="portfolio-empty">没有找到匹配内容。试试项目名、文件名或更短的业务关键词。</div>';

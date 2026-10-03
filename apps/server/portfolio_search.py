@@ -6,6 +6,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 
 import main as main_module
+from evidence_retrieval import evidence_excerpt, fuse_candidate_ranks, literal_like
 from project_intelligence import build_project_intelligence, search_project_intelligence
 from project_intelligence_api import _history_snapshots, _latest_snapshots
 
@@ -19,8 +20,10 @@ def _time_key(value: Any) -> float:
         return 0.0
 
 
-def rank_search_results(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+def rank_search_results(results: list[dict[str, Any]], limit: int, query: str | None = None) -> list[dict[str, Any]]:
     """Keep one hit per material/message and rank evidence before recency."""
+    if limit <= 0:
+        return []
     seen: set[tuple[str, str, str]] = set()
     ranked: list[dict[str, Any]] = []
     for item in sorted(results, key=lambda row: (int(row.get("score") or 0), _time_key(row.get("source_time"))), reverse=True):
@@ -30,22 +33,24 @@ def rank_search_results(results: list[dict[str, Any]], limit: int) -> list[dict[
             continue
         seen.add(key)
         ranked.append(item)
-        if len(ranked) >= limit:
-            break
-    return ranked
+    if query:
+        ranked = fuse_candidate_ranks(ranked, query)
+    return ranked[:limit]
 
 
 def _search_conversations(project_id: str, query: str) -> list[dict[str, Any]]:
     """Read the optional M7 table only when it exists in this deployment."""
     terms = query.split()
+    if not terms:
+        return []
     with main_module.get_db() as conn:
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_events'").fetchone():
             return []
         clauses = []
         params: list[Any] = [project_id]
         for term in terms:
-            clauses.append("(text LIKE ? OR conversation_name LIKE ? OR COALESCE(sender, '') LIKE ?)")
-            params.extend([f"%{term}%"] * 3)
+            clauses.append("(text LIKE ? ESCAPE '\\' OR conversation_name LIKE ? ESCAPE '\\' OR COALESCE(sender, '') LIKE ? ESCAPE '\\')")
+            params.extend([literal_like(term)] * 3)
         params.append(100)
         return [dict(row) for row in conn.execute(
             f"SELECT id, conversation_name, sender, text, observed_at, received_at FROM conversation_events "
@@ -95,27 +100,31 @@ def search_portfolio(
                         "observed_at": material.get("observed_at"),
                         "version_status": material.get("version_status"),
                         "matched_fields": hit.get("matched_fields") or [],
-                        "snippet": hit.get("snippet") or "", "score": hit.get("score") or 0,
-                    })
-            if conversation_available and source in {"all", "conversation"}:
-                messages = _search_conversations(pid, query)
-                for message in messages:
-                    found.append({
-                        "project_id": pid, "project_name": name, "source_type": "conversation",
-                        "source_id": message.get("id"),
-                        "source_name": message.get("conversation_name") or "授权会话",
-                        "source_path": None, "source_time": message.get("observed_at"),
-                        "observed_at": message.get("received_at"),
-                        "sender": message.get("sender"),
-                        "snippet": str(message.get("text") or "")[:500], "score": 55,
+                        "locator": hit.get("locator"), "location_type": hit.get("location_type"),
+                        "snippet": evidence_excerpt(hit.get("snippet") or "", query), "score": hit.get("score") or 0,
                     })
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
             unavailable.append(pid)
-    ranked = rank_search_results(found, len(found))
+        if conversation_available and source in {"all", "conversation"}:
+            messages = _search_conversations(pid, query)
+            for message in messages:
+                found.append({
+                    "project_id": pid, "project_name": name, "source_type": "conversation",
+                    "source_id": message.get("id"),
+                    "source_name": message.get("conversation_name") or "授权会话",
+                    "source_path": None, "source_time": message.get("observed_at"),
+                    "observed_at": message.get("received_at"),
+                    "sender": message.get("sender"),
+                    "matched_fields": [label for label, key in (("正文", "text"), ("会话名称", "conversation_name"), ("发送人", "sender")) if any(term.lower() in str(message.get(key) or "").lower() for term in query.split())],
+                    "snippet": evidence_excerpt(str(message.get("text") or ""), query), "score": 55,
+                })
+    ranked = rank_search_results(found, len(found), query=query)
     return {
         "query": query,
+        "ranking_method": "field_bm25_rrf",
+        "candidate_scope": "已召回候选内排序；每项目各来源最多100项",
         "project_id": project_id,
         "source": source,
         "conversation_available": conversation_available,
