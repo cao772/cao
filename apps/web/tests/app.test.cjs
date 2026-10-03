@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../app.js'), 'utf8').split("els.refresh.addEventListener")[0];
 function app(fetch, storage = new Map()) {
-  const context = vm.createContext({ fetch, AbortController, setTimeout, clearTimeout, console, crypto: require('node:crypto').webcrypto, TextEncoder, localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, document: { getElementById: () => ({}) } });
+  const context = vm.createContext({ fetch, URLSearchParams, AbortController, setTimeout, clearTimeout, console, crypto: require('node:crypto').webcrypto, TextEncoder, localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, document: { getElementById: () => ({}) } });
   vm.runInContext(source, context);
   return context;
 }
@@ -100,4 +100,20 @@ test('search highlights literal matches without injecting source HTML or interpr
   assert.equal(c.highlightEvidence('<script>TS-999</script>', 'TS-999'), '&lt;script&gt;<mark>TS-999</mark>&lt;/script&gt;');
   assert.equal(c.highlightEvidence('env_file a.b acb', 'a.b'), 'env_file <mark>a.b</mark> acb');
   assert.equal(c.highlightEvidence('缺陷处置', '缺陷'), '<mark>缺陷</mark>处置');
+});
+test('load more appends results and changing search scope restarts at zero', async () => {
+  const offsets = [];
+  const c = app(async path => {
+    const offset = Number(new URL(path, 'http://localhost').searchParams.get('offset'));
+    offsets.push(offset);
+    return response({ offset, results: Array.from({length: 30}, (_, i) => ({project_id:'p', source_type:'material', source_id:offset + i})), count:70, has_more:true });
+  });
+  vm.runInContext("els.globalSearchInput.value='query'; els.globalSearchSource.value='all'; els.globalSearchProject.value=''; renderGlobalSearchResults = () => {};", c);
+  c.document.getElementById = () => ({value:'recent'});
+  await c.runGlobalSearch();
+  await c.runGlobalSearch(true);
+  assert.equal(vm.runInContext('state.searchPayload.results.length', c), 60);
+  vm.runInContext("els.globalSearchProject.value='other'", c);
+  await c.runGlobalSearch(true);
+  assert.deepEqual(offsets, [0,30,0]);
 });

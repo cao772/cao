@@ -1,4 +1,4 @@
-const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, globalSearchLoadId: 0 };
+const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0 };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -372,7 +372,8 @@ function highlightEvidence(value, query) {
 function renderGlobalSearchResults(payload) {
   const results = payload.results || [];
   const unavailable = payload.unavailable_projects || [];
-  els.globalSearchStatus.textContent = `找到 ${payload.count || 0} 项${results.length < (payload.count || 0) ? `，显示前 ${results.length} 项` : ''}。${payload.conversation_available === false ? ' 授权沟通尚未接入此部署。' : ''}${unavailable.length ? ` ${unavailable.length} 个项目暂时无法检索。` : ''}`;
+  document.getElementById('global-search-more').hidden = !payload.has_more;
+  els.globalSearchStatus.textContent = `候选范围内找到 ${payload.count || 0} 项${results.length < (payload.count || 0) ? `，显示前 ${results.length} 项` : ''}。${payload.conversation_available === false ? ' 授权沟通尚未接入此部署。' : ''}${unavailable.length ? ` ${unavailable.length} 个项目材料暂不可用。` : ''}${payload.truncated_sources?.length ? ' 部分来源超过候选上限，请限定项目或使用更具体关键词。' : ''} 每项目各来源最多 100 项，按${payload.order === 'recent' ? '来源时间' : '相关性'}排序。`;
   els.globalSearchResults.innerHTML = results.length ? results.map((item, index) => `
     <article class="portfolio-search-hit">
       <strong>${escapeHtml(item.project_name)} · ${highlightEvidence(item.source_name || '未命名来源', payload.query)}</strong>
@@ -392,27 +393,48 @@ function renderGlobalSearchResults(payload) {
   }));
 }
 
-async function runGlobalSearch() {
+async function runGlobalSearch(loadMore = false) {
   const query = els.globalSearchInput.value.trim();
   if (!query) {
     els.globalSearchStatus.textContent = '请输入关键词。';
     return;
   }
+  const order = document.getElementById('global-search-order').value;
+  const searchKey = JSON.stringify([query, els.globalSearchSource.value, els.globalSearchProject.value, order]);
+  const append = loadMore === true && state.searchKey === searchKey && state.searchPayload;
+  const offset = append ? state.searchOffset : 0;
   const requestId = ++state.globalSearchLoadId;
+  const moreButton = document.getElementById('global-search-more');
+  moreButton.disabled = true;
+  if (!append) moreButton.hidden = true;
   els.globalSearchButton.disabled = true;
   els.globalSearchStatus.textContent = '正在检索已采集的项目材料与授权沟通…';
-  const params = new URLSearchParams({ q: query, source: els.globalSearchSource.value, limit: '30' });
+  const params = new URLSearchParams({ q: query, source: els.globalSearchSource.value, limit: '30', offset: String(offset), order });
   if (els.globalSearchProject.value) params.set('project_id', els.globalSearchProject.value);
   try {
     const payload = await api(`/api/v1/search?${params}`);
-    if (requestId === state.globalSearchLoadId) renderGlobalSearchResults(payload);
+    if (requestId === state.globalSearchLoadId) {
+      state.searchOffset = payload.offset + payload.results.length;
+      if (append) {
+        const seen = new Set();
+        payload.results = [...state.searchPayload.results, ...payload.results].filter(item => {
+          const key = JSON.stringify([item.project_id, item.source_type, item.source_id]);
+          if (seen.has(key)) return false;
+          seen.add(key); return true;
+        });
+      }
+      state.searchPayload = payload;
+      state.searchKey = searchKey;
+      renderGlobalSearchResults(payload);
+    }
   } catch (error) {
     if (requestId === state.globalSearchLoadId) {
       els.globalSearchStatus.textContent = `检索失败：${error.message}`;
-      els.globalSearchResults.innerHTML = '';
+      if (!append) els.globalSearchResults.innerHTML = '';
+      else moreButton.hidden = false;
     }
   } finally {
-    if (requestId === state.globalSearchLoadId) els.globalSearchButton.disabled = false;
+    if (requestId === state.globalSearchLoadId) { els.globalSearchButton.disabled = false; moreButton.disabled = false; }
   }
 }
 
@@ -861,7 +883,9 @@ els.portfolioNav.addEventListener('click', () => {
   showPortfolio();
 });
 els.portfolioSearch.addEventListener('input', renderPortfolio);
-els.globalSearchButton.addEventListener('click', runGlobalSearch);
+els.globalSearchButton.addEventListener('click', () => runGlobalSearch());
+document.getElementById('global-search-more').addEventListener('click', () => runGlobalSearch(true));
+for (const id of ['global-search-project', 'global-search-source', 'global-search-order']) document.getElementById(id).addEventListener('change', () => { if (els.globalSearchInput.value.trim()) runGlobalSearch(); });
 els.globalSearchInput.addEventListener('keydown', event => { if (event.key === 'Enter') runGlobalSearch(); });
 els.portfolioRefresh.addEventListener('click', async () => {
   clearReadCache();

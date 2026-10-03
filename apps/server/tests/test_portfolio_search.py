@@ -64,7 +64,28 @@ def test_missing_material_snapshot_does_not_hide_authorized_chat(monkeypatch):
     def missing(pid):
         raise HTTPException(404, 'no snapshot')
     monkeypatch.setattr(portfolio_search, '_latest_snapshots', missing)
-    result = portfolio_search.search_portfolio(q='框架', project_id=None, source='all', limit=30)
+    result = portfolio_search.search_portfolio(q='框架', project_id=None, source='all', limit=30, offset=0)
     assert result['count'] == 1
     assert result['results'][0]['matched_fields'] == ['正文']
     assert result['unavailable_projects'] == ['p1']
+
+
+def test_search_pagination_recent_order_and_candidate_limit_are_explicit(monkeypatch):
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.execute('CREATE TABLE projects (project_id TEXT, project_name TEXT)')
+    conn.execute("INSERT INTO projects VALUES ('p1', 'Project')")
+    conn.commit()
+    monkeypatch.setattr(portfolio_search.main_module, 'get_db', lambda: conn)
+    monkeypatch.setattr(portfolio_search, '_material_intelligence', lambda pid: {})
+    hits = [{'score': i, 'snippet': 'query', 'material': {'path': f'doc-{i}', 'name': f'doc-{i}', 'modified_at': f'2026-10-{i % 3 + 1:02}'}} for i in range(100)]
+    monkeypatch.setattr(portfolio_search, 'search_project_intelligence', lambda *args, **kwargs: {'count': 105, 'results': hits})
+    first = portfolio_search.search_portfolio(q='query', project_id=None, source='material', limit=30, offset=0, order='recent')
+    second = portfolio_search.search_portfolio(q='query', project_id=None, source='material', limit=30, offset=30, order='recent')
+    last = portfolio_search.search_portfolio(q='query', project_id=None, source='material', limit=30, offset=90, order='recent')
+    assert len(first['results']) == len(second['results']) == 30
+    assert len(last['results']) == 10 and not last['has_more']
+    assert first['has_more'] and first['count'] == 100
+    assert first['truncated_sources'] == [{'project_id': 'p1', 'source': 'material'}]
+    assert not {row['source_id'] for row in first['results']} & {row['source_id'] for row in second['results']}
+    assert first['results'][0]['source_time'] == '2026-10-03'

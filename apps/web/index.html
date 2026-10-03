@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
   <link rel="stylesheet" href="/project-intelligence.css?v=p1-evidence-2" />
-  <link rel="stylesheet" href="/portfolio.css?v=p5-evidence-search-1" />
+  <link rel="stylesheet" href="/portfolio.css?v=p6-search-speed-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -61,10 +61,12 @@
           <label><span>关键词</span><input id="global-search-input" type="search" placeholder="例如：费用、验收、框架、关键决定" autocomplete="off" /></label>
           <label><span>项目</span><select id="global-search-project"><option value="">全部项目</option></select></label>
           <label><span>来源</span><select id="global-search-source"><option value="all">全部来源</option><option value="material">项目材料</option><option value="conversation">授权沟通</option></select></label>
+          <label><span>结果排序</span><select id="global-search-order"><option value="relevance">相关性优先</option><option value="recent">最近优先</option></select></label>
           <button id="global-search-btn" class="primary-button" type="button">搜索</button>
         </div>
         <div id="global-search-status" class="portfolio-search-status" role="status" aria-live="polite">输入关键词开始检索。</div>
         <div id="global-search-results" class="portfolio-search-results"></div>
+        <button id="global-search-more" class="secondary-button" type="button" hidden>加载更多结果</button>
       </section>
       <div class="portfolio-toolbar">
         <div>
@@ -447,7 +449,7 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=p5-evidence-search-1"></script>
+  <script src="/app.js?v=p6-search-speed-1"></script>
   <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>

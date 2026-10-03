@@ -8,7 +8,7 @@
 .portfolio-global-search { background: #fff; border: 1px solid #dce7f0; border-radius: 12px; padding: 19px 20px; margin-bottom: 23px; }
 .portfolio-search-heading h3 { margin: 0 0 4px; color: #183d62; font-size: 17px; }
 .portfolio-search-heading p { margin: 0 0 15px; color: #788b9e; font-size: 11px; }
-.portfolio-search-controls { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(130px, 190px) minmax(130px, 170px) auto; align-items: end; gap: 10px; }
+.portfolio-search-controls { display: grid; grid-template-columns: minmax(200px, 1fr) repeat(3, minmax(120px, 160px)) auto; align-items: end; gap: 10px; }
 .portfolio-search-controls label { display: grid; gap: 5px; min-width: 0; color: #5d7084; font-size: 11px; font-weight: 650; }
 .portfolio-search-controls input, .portfolio-search-controls select { width: 100%; min-height: 39px; border: 1px solid #d6e0e9; border-radius: 7px; padding: 0 10px; background: #fff; color: #253d54; font: inherit; font-weight: 400; }
 .portfolio-search-controls button { min-height: 39px; }
