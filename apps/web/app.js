@@ -146,26 +146,88 @@ function dailyFocusItems(rows) {
     const date = portfolioSourceDate(row);
     const age = portfolioAgeDays(date);
     const textOf = value => typeof value === 'string' ? value : value?.text || value?.title || '';
-    const issue = textOf(row.brief?.issues?.[0]);
-    const next = textOf(row.brief?.next_steps?.[0]);
+    const issues = [...new Set((row.brief?.issues || []).map(textOf).filter(Boolean))];
+    const nextSteps = [...new Set((row.brief?.next_steps || []).map(textOf).filter(Boolean))];
     if (row.briefError || row.intelligenceError) items.push({ row, priority: 0, kind: '来源异常', text: '部分项目资料读取失败，请打开项目核对或刷新重试。' });
-    if (issue) items.push({ row, priority: 1, kind: '待核对问题', text: issue });
-    else if (next) items.push({ row, priority: 2, kind: '可推进事项', text: next });
+    for (const issue of issues) items.push({ row, priority: 1, kind: '待核对问题', text: issue });
+    for (const next of nextSteps) items.push({ row, priority: 2, kind: '可推进事项', text: next });
     if (age === null || age > 14) items.push({ row, priority: 3, kind: '资料待更新', text: age === null ? '资料日期未知，请核对当前背景与进展。' : `资料距今 ${age} 天，请核对上述事项是否仍然有效。` });
   }
   return items.sort((a, b) => a.priority - b.priority);
 }
-function renderDailyFocus(rows) {
-  const items = dailyFocusItems(rows);
+const focusStorageKey = 'cao.focus.v1';
+let focusRenderVersion = 0;
+function readFocusTracking() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(focusStorageKey) || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([key, value]) =>
+      /^[a-f0-9]{64}$/.test(key) && value && ['done', 'snoozed'].includes(value.status)
+      && Number.isFinite(value.updatedAt) && (value.status !== 'snoozed' || Number.isFinite(value.until))));
+  } catch { return {}; }
+}
+async function focusIdentity(item) {
+  // Age in days changes daily; source date, not age, identifies a stale-source reminder.
+  const identity = [item.row.project.project_id, item.kind, portfolioSourceDate(item.row), item.priority === 3 ? '' : item.text];
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(identity)));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+function focusStatus(record, now = Date.now()) {
+  if (record?.status === 'done') return 'done';
+  return record?.status === 'snoozed' && record.until > now ? 'snoozed' : 'open';
+}
+function saveFocusTracking(id, action) {
+  if (!/^[a-f0-9]{64}$/.test(id) || !['done', 'snooze', 'restore'].includes(action)) throw new Error('invalid focus action');
+  const records = readFocusTracking();
+  if (action === 'restore') delete records[id];
+  else {
+    const tomorrow = new Date();
+    tomorrow.setHours(24, 0, 0, 0);
+    records[id] = { status: action === 'done' ? 'done' : 'snoozed', updatedAt: Date.now(), until: action === 'done' ? null : tomorrow.getTime() };
+  }
+  // Bound metadata growth; only fingerprints and handling state are persisted.
+  const entries = Object.entries(records).sort((a, b) => b[1].updatedAt - a[1].updatedAt).slice(0, 1000);
+  localStorage.setItem(focusStorageKey, JSON.stringify(Object.fromEntries(entries)));
+}
+async function renderDailyFocus(rows) {
+  const version = ++focusRenderVersion;
   const target = document.getElementById('daily-focus-items');
+  const records = readFocusTracking();
+  let items;
+  try {
+    items = await Promise.all(dailyFocusItems(rows).map(async item => {
+      const id = await focusIdentity(item);
+      return { ...item, id, status: focusStatus(records[id]) };
+    }));
+  } catch {
+    if (version === focusRenderVersion) target.innerHTML = '<p class="muted">当前浏览器无法生成跟进标识，请使用 localhost 或安全连接。下方项目目录仍可使用。</p>';
+    return;
+  }
+  if (version !== focusRenderVersion) return;
+  const includeHandled = document.getElementById('focus-show-handled').checked;
+  const visible = items.filter(item => includeHandled || item.status === 'open');
+  const expanded = document.getElementById('focus-show-all').checked;
+  const displayed = expanded ? visible : visible.slice(0, 8);
+  const openCount = items.filter(item => item.status === 'open').length;
+  document.getElementById('focus-count').textContent = `待关注 ${openCount} · 已处理 ${items.filter(item => item.status === 'done').length} · 稍后 ${items.filter(item => item.status === 'snoozed').length}`;
   document.getElementById('daily-focus-date').textContent = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
-  target.innerHTML = items.length ? items.slice(0, 8).map(item => `<article class="daily-focus-item">
+  target.innerHTML = visible.length ? displayed.map(item => `<article class="daily-focus-item">
     <div><span class="badge ${item.priority < 2 ? 'warn' : 'neutral'}">${escapeHtml(item.kind)}</span><strong>${escapeHtml(projectLabel(item.row.project))}</strong></div>
     <p>${escapeHtml(item.text)}</p>
     <small>资料日期：${escapeHtml(portfolioDate(portfolioSourceDate(item.row)))}</small>
-    <button type="button" class="secondary-button" data-focus-project="${escapeHtml(item.row.project.project_id)}">查看依据与进展</button>
-  </article>`).join('') : '<p class="muted">已读取的资料中暂未发现待关注事项。可从下方项目目录继续查看。</p>';
+    ${item.status !== 'open' ? `<small>${item.status === 'done' ? '已处理此提醒（不代表项目问题已解决）' : '明天重新提醒'}</small>` : ''}
+    <div class="focus-actions"><button type="button" class="secondary-button" data-focus-project="${escapeHtml(item.row.project.project_id)}">查看依据与进展</button>
+    ${item.status === 'open' ? `<button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="done">已处理</button><button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="snooze">明天再看</button>` : `<button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="restore">恢复关注</button>`}</div>
+  </article>`).join('') : `<p class="muted">${items.length ? '当前提醒已处理或延后。勾选“显示已处理和稍后事项”可恢复关注。' : '已读取的资料中暂未发现待关注事项。可从下方项目目录继续查看。'}</p>`;
+  if (displayed.length < visible.length) target.insertAdjacentHTML('beforeend', `<p class="muted">另有 ${visible.length - displayed.length} 项，勾选“展开全部事项”查看。</p>`);
   target.querySelectorAll('[data-focus-project]').forEach(button => button.addEventListener('click', () => selectProject(button.dataset.focusProject)));
+  target.querySelectorAll('[data-focus-action]').forEach(button => button.addEventListener('click', () => {
+    try {
+      saveFocusTracking(button.dataset.focusId, button.dataset.focusAction);
+      renderDailyFocus(state.portfolioRows);
+      showToast('跟进状态已保存到当前浏览器');
+    } catch { showToast('浏览器不允许保存，跟进状态未更改。请检查浏览器存储设置。', true); }
+  }));
 }
 
 function renderPortfolio() {
@@ -819,5 +881,13 @@ document.getElementById('copy-project-brief').addEventListener('click', async ()
     await navigator.clipboard.writeText(lines.join('\n'));
     showToast('项目简报已复制，可粘贴到微信或文档');
   } catch (error) { showToast(`复制失败：${error.message}`, true); }
+});
+for (const id of ['focus-show-handled', 'focus-show-all']) document.getElementById(id).addEventListener('change', () => renderDailyFocus(state.portfolioRows));
+window.addEventListener('storage', event => {
+  if (event.key === focusStorageKey || event.key === null) renderDailyFocus(state.portfolioRows);
+});
+// Re-evaluate snoozes when the user returns the next day.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !els.portfolioView.classList.contains('hidden')) renderDailyFocus(state.portfolioRows);
 });
 bootstrap();

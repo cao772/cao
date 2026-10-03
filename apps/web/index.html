@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
   <link rel="stylesheet" href="/project-intelligence.css?v=p1-evidence-2" />
-  <link rel="stylesheet" href="/portfolio.css?v=p3-offline-product-1" />
+  <link rel="stylesheet" href="/portfolio.css?v=p4-focus-tracking-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -51,6 +51,8 @@
       <section id="portfolio-overview" class="portfolio-overview" aria-label="项目组合概况"></section>
       <section class="daily-focus" aria-label="今日关注">
         <div class="portfolio-search-heading"><h3>今天先关注什么 <small id="daily-focus-date"></small></h3><p>依据已采集资料整理，按来源异常、问题、下一步和资料时效排列；不代表今天新发生，也不自动代你执行。</p></div>
+        <div class="portfolio-filters"><label><input id="focus-show-handled" type="checkbox" /> 显示已处理和稍后事项</label><label><input id="focus-show-all" type="checkbox" /> 展开全部事项</label><span id="focus-count" role="status"></span></div>
+        <p class="focus-local-note">跟进状态仅保存在当前浏览器，清除网站数据会重置。仅保存事项指纹与状态，不保存资料正文；明天再看在当地次日零点恢复，不会发送通知。</p>
         <div id="daily-focus-items" class="daily-focus-grid"><p class="muted">正在整理待关注事项…</p></div>
       </section>
       <section class="portfolio-global-search" aria-label="跨项目检索">
@@ -445,7 +447,7 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=p3-offline-product-1"></script>
+  <script src="/app.js?v=p4-focus-tracking-1"></script>
   <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>

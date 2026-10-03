@@ -104,3 +104,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .daily-focus-item small { display: block; color: #71869a; margin-bottom: 12px; }
 
 .topbar-actions { flex-wrap: wrap; }
+
+.focus-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.focus-local-note { color: #657c92; font-size: 12px; line-height: 1.6; margin: -6px 0 16px; }
