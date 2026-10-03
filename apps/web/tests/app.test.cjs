@@ -117,3 +117,56 @@ test('load more appends results and changing search scope restarts at zero', asy
   await c.runGlobalSearch(true);
   assert.deepEqual(offsets, [0,30,0]);
 });
+
+function intelligence(api) {
+  const elements = new Map();
+  const c = vm.createContext({api, URLSearchParams, state: {selectedProjectId:'p', projects:[]}, projectLabel:()=> 'Project', document:{getElementById(id){
+    if (!elements.has(id)) elements.set(id, {innerHTML:'old project', value:'query', checked:false, classList:{add(){},remove(){}}});
+    return elements.get(id);
+  }}});
+  const code = fs.readFileSync(require('node:path').join(__dirname,'../project-intelligence.js'),'utf8').split("intelligenceEls.open?.addEventListener")[0];
+  vm.runInContext(code,c);
+  vm.runInContext("for (const name of ['renderDossier','renderIntelligenceSummary','renderProgress','renderRepositories','renderMaterialCategories','renderSeries','renderRecentChanges','renderHealth']) globalThis[name] = data => { globalThis.rendered = data; }; renderSearchResults = data => { globalThis.result = data; };", c);
+  return {c, elements};
+}
+test('project intelligence clears previous content and ignores late same-project loads', async () => {
+  const resolve = [];
+  const {c,elements} = intelligence(() => new Promise(r=>resolve.push(r)));
+  const old = c.loadProjectIntelligence('p');
+  assert.doesNotMatch(elements.get('intelligence-progress').innerHTML,/old project/);
+  const fresh = c.loadProjectIntelligence('p');
+  resolve[1]({context:{available:true},summary:{},version:'new'});
+  await fresh;
+  resolve[0]({version:'old'});
+  await old;
+  assert.equal(c.rendered.version,'new');
+});
+test('late search responses cannot overwrite a newer query or release its button', async () => {
+  const resolve=[];
+  const {c,elements} = intelligence(()=>new Promise(r=>resolve.push(r)));
+  vm.runInContext("intelligenceState.projectId='p'",c);
+  const old=c.runIntelligenceSearch();
+  elements.get('intelligence-search-input').value='new';
+  const fresh=c.runIntelligenceSearch();
+  resolve[0]({query:'old'}); await old;
+  assert.equal(c.result,undefined);
+  assert.equal(elements.get('intelligence-search-btn').disabled,true);
+  resolve[1]({query:'new'}); await fresh;
+  assert.equal(c.result.query,'new');
+  assert.equal(elements.get('intelligence-search-btn').disabled,false);
+});
+test('leaving a project prevents an in-flight search from changing the page', async () => {
+  let finish;
+  const {c} = intelligence(()=>new Promise(r=>finish=r));
+  vm.runInContext("intelligenceState.projectId='p'",c);
+  const search=c.runIntelligenceSearch();
+  c.state.selectedProjectId='other';
+  finish({query:'private previous project'}); await search;
+  assert.equal(c.result,undefined);
+});
+test('failed intelligence load clears loading placeholders and allows search retry', async () => {
+  const {c,elements}=intelligence(async()=>{throw new Error('503');});
+  await assert.rejects(c.loadProjectIntelligence('p'),/503/);
+  assert.match(elements.get('intelligence-progress').innerHTML,/读取失败/);
+  assert.equal(elements.get('intelligence-search-btn').disabled,false);
+});

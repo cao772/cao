@@ -1,4 +1,4 @@
-const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0 };
+const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, projectLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0 };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -385,8 +385,12 @@ function renderGlobalSearchResults(payload) {
   els.globalSearchResults.querySelectorAll('[data-global-search-open]').forEach(button => button.addEventListener('click', async () => {
     const item = results[Number(button.dataset.globalSearchOpen)];
     if (!item) return;
-    await selectProject(item.project_id);
+    const opening = selectProject(item.project_id);
+    const requestId = state.projectLoadId;
+    await opening;
+    if (state.projectLoadId !== requestId || state.selectedProjectId !== item.project_id || document.getElementById('dashboard-view').classList.contains('hidden')) return;
     await showIntelligenceView();
+    if (state.projectLoadId !== requestId || state.selectedProjectId !== item.project_id || document.getElementById('intelligence-view').classList.contains('hidden')) return;
     const searchInput = document.getElementById('intelligence-search-input');
     if (searchInput) searchInput.value = payload.query;
     await runIntelligenceSearch();
@@ -777,6 +781,8 @@ async function loadProject(projectId) {
 }
 
 async function selectProject(projectId) {
+  const requestId = ++state.projectLoadId;
+  state.detail = null;
   state.selectedProjectId = projectId;
   els.portfolioNav.classList.remove('active');
   els.portfolioView.classList.add('hidden');
@@ -795,7 +801,7 @@ async function selectProject(projectId) {
   els.timeline.innerHTML = '<div class="empty">正在加载每周进展…</div>';
   try {
     const detail = await loadProject(projectId);
-    if (state.selectedProjectId !== projectId) return;
+    if (state.selectedProjectId !== projectId || state.projectLoadId !== requestId) return;
     state.detail = detail;
     renderOverview(project, state.detail);
     renderTasks(state.detail);
@@ -815,7 +821,7 @@ async function selectProject(projectId) {
       }
     }
   } catch (error) {
-    if (state.selectedProjectId !== projectId) return;
+    if (state.selectedProjectId !== projectId || state.projectLoadId !== requestId) return;
     els.overview.innerHTML = metric('项目状态', '加载失败', '请点击“刷新数据”重试', true);
     els.taskTable.innerHTML = '<div class="empty">当前任务加载失败</div>';
     els.projectMemory.innerHTML = '<div class="empty">项目进展加载失败</div>';

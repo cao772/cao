@@ -40,7 +40,10 @@ renderIntelligenceSummary = function renderIntelligenceSummaryWithCommunications
 
 const loadProjectIntelligenceBeforeCommunications = loadProjectIntelligence;
 loadProjectIntelligence = async function loadProjectIntelligenceWithCommunications(projectId) {
-  await loadProjectIntelligenceBeforeCommunications(projectId);
+  const loading = loadProjectIntelligenceBeforeCommunications(projectId);
+  const requestId = intelligenceState.loadId;
+  await loading;
+  if (intelligenceState.loadId !== requestId || state.selectedProjectId !== projectId) return;
   const count = (intelligenceState.data && intelligenceState.data.communications && intelligenceState.data.communications.message_count) || 0;
   if (count) intelligenceEls.subtitle.textContent = "理解项目材料、微信沟通、版本关系和最近变化，并统一搜索关键信息";
 };

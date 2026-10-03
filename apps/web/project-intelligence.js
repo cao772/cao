@@ -2,6 +2,8 @@ const intelligenceState = {
   projectId: null,
   data: null,
   search: null,
+  loadId: 0,
+  searchId: 0,
 };
 
 const intelligenceEls = {
@@ -412,6 +414,8 @@ async function runIntelligenceSearch() {
     intelligenceEls.searchStatus.textContent = '请输入要查找的文件名、编号、金额、功能或正文关键词。';
     return;
   }
+  const requestId = ++intelligenceState.searchId;
+  const isCurrent = () => intelligenceState.searchId === requestId && intelligenceState.projectId === projectId && state.selectedProjectId === projectId;
   intelligenceEls.searchButton.disabled = true;
   intelligenceEls.searchButton.textContent = '搜索中...';
   try {
@@ -419,26 +423,53 @@ async function runIntelligenceSearch() {
     if (intelligenceEls.searchType.value) params.set('material_type', intelligenceEls.searchType.value);
     if (intelligenceEls.currentOnly.checked) params.set('current_only', 'true');
     const payload = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/search?${params.toString()}`);
-    renderSearchResults(payload);
+    if (isCurrent()) renderSearchResults(payload);
   } catch (error) {
+    if (!isCurrent()) return;
     intelligenceEls.searchStatus.textContent = `搜索失败：${error.message}`;
     intelligenceEls.searchResults.innerHTML = '';
   } finally {
+    if (!isCurrent()) return;
     intelligenceEls.searchButton.disabled = false;
     intelligenceEls.searchButton.textContent = '搜索';
   }
 }
 
 async function loadProjectIntelligence(projectId) {
+  const requestId = ++intelligenceState.loadId;
+  if (intelligenceState.projectId !== projectId) intelligenceEls.searchInput.value = '';
+  ++intelligenceState.searchId;
   intelligenceState.projectId = projectId;
+  intelligenceState.data = null;
+  intelligenceState.search = null;
+  intelligenceEls.searchButton.disabled = true;
+  intelligenceEls.searchButton.textContent = '搜索';
+  intelligenceEls.searchResults.innerHTML = '';
+  intelligenceEls.searchStatus.textContent = '正在读取项目材料索引…';
+  for (const key of ['summary', 'context', 'progress', 'repositories', 'categories', 'series', 'changes', 'health']) {
+    intelligenceEls[key].innerHTML = '<div class="intelligence-empty">正在读取…</div>';
+  }
   const project = state.projects.find(item => item.project_id === projectId) || {};
   intelligenceEls.title.textContent = `${projectLabel(project)} · 项目认知`;
   intelligenceEls.subtitle.textContent = '理解项目材料、版本关系、最近变化，并直接搜索文件内容中的关键信息';
   intelligenceEls.status.textContent = '加载中';
   intelligenceEls.status.className = 'badge neutral';
   intelligenceEls.dossier.innerHTML = '<div class="intelligence-empty">正在读取项目依据…</div>';
-  const data = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/intelligence`);
-  if (intelligenceState.projectId !== projectId) return;
+  let data;
+  const isCurrent = () => intelligenceState.loadId === requestId && intelligenceState.projectId === projectId && state.selectedProjectId === projectId;
+  try {
+    data = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/intelligence`);
+  } catch (error) {
+    if (!isCurrent()) return;
+    for (const key of ['summary', 'dossier', 'context', 'progress', 'repositories', 'categories', 'series', 'changes', 'health']) {
+      intelligenceEls[key].innerHTML = '<div class="intelligence-empty">读取失败，请返回项目后重试。</div>';
+    }
+    intelligenceEls.searchStatus.textContent = '项目概况暂不可用，仍可尝试关键词搜索。';
+    intelligenceEls.searchButton.disabled = false;
+    throw error;
+  }
+  if (!isCurrent()) return;
+  intelligenceEls.searchButton.disabled = false;
   intelligenceState.data = data;
   renderDossier(data);
   renderIntelligenceSummary(data);
@@ -449,7 +480,7 @@ async function loadProjectIntelligence(projectId) {
   renderRecentChanges(data);
   renderHealth(data);
   const contextAvailable = data.context?.available;
-  intelligenceEls.status.textContent = contextAvailable ? '项目认知已接入' : '自动理解中';
+  intelligenceEls.status.textContent = contextAvailable ? '项目认知已接入' : '项目背景资料待补充';
   intelligenceEls.status.className = `badge ${contextAvailable ? 'good' : 'warn'}`;
   intelligenceEls.searchStatus.textContent = (data.summary?.search_indexed_file_count || 0)
     ? `已索引 ${data.summary.search_indexed_file_count} 份材料正文。输入关键词可定位到页、Sheet/行、段落或文本行。`
