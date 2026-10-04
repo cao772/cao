@@ -69,3 +69,15 @@ def test_invalid_refresh_preserves_last_good_snapshot(tmp_path):
     reader.read('selected');now[0]+=301
     assert reader.read('selected')['status']=='stale'
     assert json.loads((tmp_path/'selected.json').read_text())['data']['items'][0]['title']=='News'
+
+
+def test_original_rank_is_preserved_and_old_cache_is_upgraded(tmp_path):
+    old = normalize(sample(), 'hot')
+    (tmp_path/'hot.json').write_text(json.dumps({'fetched':1000,'data':old}))
+    data = sample();data['items'][0]['rank']=7
+    reader=NewsReader(tmp_path,lambda _:data,lambda:1001)
+    result=reader.read('hot')
+    assert result['items'][0]['rank']==7
+    assert json.loads((tmp_path/'hot.json').read_text())['format']==2
+    data['items'][0]['rank']=True
+    assert normalize(data,'hot')['items'][0]['rank'] is None

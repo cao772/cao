@@ -63,7 +63,7 @@ def normalize(payload, view):
                       "url": original, "attribution_url": attribution, "story_url": safe_link(links.get("story")),
                       "published_at": text(item.get("publishedAt"), 80), "discovered_at": text(item.get("discoveredAt"), 80),
                       "latest_at": text(item.get("latestAt"), 80), "category": text(item.get("category"), 100),
-                      "section": section, "source_count": item.get("sourceCount") if type(item.get("sourceCount")) is int else None})
+                      "section": section, "rank": item.get("rank") if type(item.get("rank")) is int and item["rank"] > 0 else None, "source_count": item.get("sourceCount") if type(item.get("sourceCount")) is int else None})
     page = payload.get("page") if isinstance(payload.get("page"), dict) else {}
     return {"items": items, "has_more": bool(page.get("hasMore")), "report_date": text(report.get("date"), 40),
             "report_generated_at": text(report.get("generatedAt"), 80),
@@ -101,13 +101,13 @@ class NewsReader:
                         entry = None
                 except (OSError, ValueError, TypeError, AttributeError):
                     entry = None
-            if entry and 0 <= now - entry["fetched"] < 300:
+            if entry and entry.get("format") == 2 and 0 <= now - entry["fetched"] < 300:
                 self.cache[view] = entry
                 return self._result(entry, False)
             if now >= self.retry_at.get(view, 0):
                 try:
                     data = normalize(self.fetch(view), view)
-                    entry = {"fetched": now, "data": data}
+                    entry = {"format": 2, "fetched": now, "data": data}
                     self.cache[view] = entry
                     self.retry_at.pop(view, None)
                     try:

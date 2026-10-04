@@ -88,9 +88,9 @@
     </main>
 
     <main id="news-view" class="main portfolio-main hidden">
-      <header class="topbar portfolio-topbar"><div><div class="eyebrow">INDUSTRY INTELLIGENCE</div><h2>AI 行业资讯</h2><p>追踪外部动态，帮助发现值得进一步研究的技术与产品。</p></div><button id="news-refresh" class="secondary-button" type="button">刷新资讯</button></header>
+      <header class="topbar portfolio-topbar"><div><div class="eyebrow">INDUSTRY INTELLIGENCE</div><h2>AI 行业资讯</h2><p>追踪外部动态，帮助发现值得进一步研究的技术与产品。</p></div><div class="topbar-actions"><button id="news-copy" class="secondary-button" type="button" disabled>复制当前简报</button><button id="news-refresh" class="secondary-button" type="button">刷新资讯</button></div></header>
       <section class="portfolio-global-search">
-        <div class="news-controls"><label>栏目<select id="news-mode"><option value="hot">多来源热点</option><option value="selected">最近 7 天精选</option><option value="daily">最新日报</option></select></label><label>筛选已载入内容<input id="news-query" type="search" placeholder="例如：智能体、多模态、论文" autocomplete="off" /></label></div>
+        <div class="news-controls"><label>栏目<select id="news-mode"><option value="hot">多来源热点</option><option value="selected">最近 7 天精选</option><option value="daily">最新日报</option></select></label><label>分类<select id="news-category"><option value="">全部分类</option></select></label><label>筛选已载入内容<input id="news-query" type="search" placeholder="例如：智能体、多模态、论文" autocomplete="off" /></label></div>
         <p class="news-note">内容来自 <a href="https://aihot.news" target="_blank" rel="noopener noreferrer">AIHOT</a>，由其整理；外部资讯不代表项目进展。原文发布日期缺失时会明确标记。平台不调用模型，也不会向来源发送项目资料或筛选关键词。</p>
         <div id="news-status" class="portfolio-search-status" role="status" aria-live="polite">选择栏目查看已发布资讯。</div>
         <div id="news-results" class="portfolio-search-results"></div>
