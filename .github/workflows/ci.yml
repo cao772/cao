@@ -47,7 +47,8 @@ jobs:
           node --check apps/web/settings-wechat.js
           node --check apps/web/project-intelligence.js
           node --check apps/web/project-communications.js
-          node --test apps/web/tests/app.test.cjs
+          node --check apps/web/industry-news.js
+          node --test apps/web/tests/*.test.cjs
 
       - name: Validate configs
         env:
@@ -81,7 +82,7 @@ jobs:
               index.html styles.css settings.css project-intelligence.css portfolio.css \
               app.js settings.js settings-projects.js settings-local-scope.js \
               settings-policy.js settings-model.js settings-nodes.js settings-wechat.js \
-              project-intelligence.js project-communications.js; do
+              project-intelligence.js project-communications.js industry-news.js; do
               test -s "$root/$file"
             done
             grep -q "/settings.css" "$root/index.html"
@@ -91,4 +92,5 @@ jobs:
             grep -q "/portfolio.css" "$root/index.html"
             grep -q "/project-intelligence.js" "$root/index.html"
             grep -q "/project-communications.js" "$root/index.html"
+            grep -q "/industry-news.js" "$root/index.html"
           '

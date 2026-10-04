@@ -199,3 +199,15 @@ test('progress items escape source content and remove duplicate list markers', (
   assert.match(html,/&lt;script&gt;/);
   assert.doesNotMatch(html,/<script>|<li>- /);
 });
+
+test('opening industry news during initial project load keeps that view open', async () => {
+  let finishHealth;
+  const c=app(path=>path==='/health' ? new Promise(resolve=>finishHealth=resolve) : Promise.resolve(response([{project_id:'p'}])));
+  let newsActive=false;
+  c.document.getElementById=()=>({classList:{contains:()=>newsActive}});
+  vm.runInContext("renderProjectList = () => {}; showPortfolio = () => { throw new Error('unexpected navigation'); };",c);
+  const loading=c.bootstrap();
+  newsActive=true;
+  finishHealth(response({status:'ok'}));
+  assert.equal(await loading,true);
+});

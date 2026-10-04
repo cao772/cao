@@ -28,6 +28,7 @@
       <nav id="project-list" class="project-list"><div class="empty">正在加载项目…</div></nav>
 
       <div class="sidebar-section-title platform-title">平台</div>
+      <button id="news-nav" class="project-item" type="button"><span class="name">AI 行业资讯</span><span class="meta">热点 · 精选 · 日报</span></button>
       <button id="settings-nav" class="project-item settings-nav" type="button">
         <span class="name">平台配置</span>
         <span class="meta"><span>接入与采集</span><span>⚙</span></span>
@@ -84,6 +85,18 @@
         <span id="portfolio-match-count" role="status"></span>
       </div>
       <section id="portfolio-grid" class="portfolio-grid" aria-label="项目列表"><div class="empty">正在读取项目…</div></section>
+    </main>
+
+    <main id="news-view" class="main portfolio-main hidden">
+      <header class="topbar portfolio-topbar"><div><div class="eyebrow">INDUSTRY INTELLIGENCE</div><h2>AI 行业资讯</h2><p>追踪外部动态，帮助发现值得进一步研究的技术与产品。</p></div><button id="news-refresh" class="secondary-button" type="button">刷新资讯</button></header>
+      <section class="portfolio-global-search">
+        <div class="news-controls"><label>栏目<select id="news-mode"><option value="hot">多来源热点</option><option value="selected">最近 7 天精选</option><option value="daily">最新日报</option></select></label><label>筛选已载入内容<input id="news-query" type="search" placeholder="例如：智能体、多模态、论文" autocomplete="off" /></label></div>
+        <p class="news-note">内容来自 <a href="https://aihot.news" target="_blank" rel="noopener noreferrer">AIHOT</a>，由其整理；外部资讯不代表项目进展。原文发布日期缺失时会明确标记。平台不调用模型，也不会向来源发送项目资料或筛选关键词。</p>
+        <div id="news-status" class="portfolio-search-status" role="status" aria-live="polite">选择栏目查看已发布资讯。</div>
+        <div id="news-results" class="portfolio-search-results"></div>
+        <button id="news-more" class="secondary-button" type="button" hidden>查看更多资讯</button>
+        <p class="news-note">再次查看时检查更新，5 分钟内复用已获取内容；断网时保留最近成功读取的内容并提示。每日推送继续由 Hermes 管理。</p>
+      </section>
     </main>
 
     <main id="dashboard-view" class="main hidden">
@@ -459,5 +472,6 @@
   <script src="/settings-wechat.js?v=m7-gateway-status-1"></script>
   <script src="/project-intelligence.js?v=p1-evidence-2"></script>
   <script src="/project-communications.js"></script>
+  <script src="/industry-news.js?v=1"></script>
 </body>
 </html>

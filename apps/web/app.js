@@ -338,6 +338,8 @@ async function loadPortfolio() {
 }
 
 function showPortfolio() {
+  document.getElementById('news-view')?.classList.add('hidden');
+  document.getElementById('news-nav')?.classList.remove('active');
   state.selectedProjectId = null;
   renderProjectList();
   els.portfolioNav.classList.add('active');
@@ -781,6 +783,8 @@ async function loadProject(projectId) {
 }
 
 async function selectProject(projectId) {
+  document.getElementById('news-view')?.classList.add('hidden');
+  document.getElementById('news-nav')?.classList.remove('active');
   const requestId = ++state.projectLoadId;
   state.detail = null;
   state.selectedProjectId = projectId;
@@ -849,6 +853,7 @@ async function bootstrap() {
     els.apiStateText.textContent = '服务正常';
     state.projects = await api('/api/v1/projects');
     renderProjectList();
+    if (document.getElementById('news-nav')?.classList?.contains('active')) return true;
     if (state.selectedProjectId && state.projects.some(item => item.project_id === state.selectedProjectId)) {
       await selectProject(state.selectedProjectId);
     } else {

@@ -109,3 +109,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .focus-local-note { color: #657c92; font-size: 12px; line-height: 1.6; margin: -6px 0 16px; }
 
 .portfolio-search-hit mark { background: #fff0b8; color: #173c60; border-radius: 3px; padding: 0 2px; }
+
+.news-controls { display: grid; grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); gap: 14px; }
+.news-controls label { display: grid; gap: 7px; color: #5d7084; font-size: 12px; }
+.news-controls input, .news-controls select { width: 100%; min-height: 40px; border: 1px solid #d6e0e9; border-radius: 7px; padding: 8px 10px; font: inherit; background: #fff; }
+.news-note { color: #788b9e; font-size: 12px; line-height: 1.7; }
+.news-card { padding: 17px; }
+.news-card h3 { margin: 7px 0; color: #183d62; font-size: 17px; line-height: 1.5; overflow-wrap: anywhere; }
+.news-card-category { color: #5b7890; font-size: 11px; }
+.news-links { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 12px; }
+.news-links a, .news-note a { color: #276895; }
+@media (max-width: 600px) { .news-controls { grid-template-columns: 1fr; } }

@@ -15,6 +15,7 @@ COPY apps/web/settings-nodes.js /usr/share/nginx/html/settings-nodes.js
 COPY apps/web/settings-wechat.js /usr/share/nginx/html/settings-wechat.js
 COPY apps/web/project-intelligence.js /usr/share/nginx/html/project-intelligence.js
 COPY apps/web/project-communications.js /usr/share/nginx/html/project-communications.js
+COPY apps/web/industry-news.js /usr/share/nginx/html/industry-news.js
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
