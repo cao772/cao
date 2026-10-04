@@ -126,6 +126,7 @@ function intelligence(api) {
   }}});
   const code = fs.readFileSync(require('node:path').join(__dirname,'../project-intelligence.js'),'utf8').split("intelligenceEls.open?.addEventListener")[0];
   vm.runInContext(code,c);
+  vm.runInContext("globalThis.realRenderProgress = renderProgress; globalThis.escapeHtml = value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;');",c);
   vm.runInContext("for (const name of ['renderDossier','renderIntelligenceSummary','renderProgress','renderRepositories','renderMaterialCategories','renderSeries','renderRecentChanges','renderHealth']) globalThis[name] = data => { globalThis.rendered = data; }; renderSearchResults = data => { globalThis.result = data; };", c);
   return {c, elements};
 }
@@ -169,4 +170,32 @@ test('failed intelligence load clears loading placeholders and allows search ret
   await assert.rejects(c.loadProjectIntelligence('p'),/503/);
   assert.match(elements.get('intelligence-progress').innerHTML,/读取失败/);
   assert.equal(elements.get('intelligence-search-btn').disabled,false);
+});
+
+
+test('project progress keeps recorded and inferred stages distinct and exposes known issues', () => {
+  const {c,elements}=intelligence(async()=>({}));
+  c.realRenderProgress({context:{available:true,project:{current_stage:'代码同步完成，待验证'},current_work:['核对分支'],known_issues:['框架版本不兼容'],modified_at:'2026-09-24'},progress:{current_stage:'测试与验证',issues:[],source_status:{freshness_reference_date:'2026-09-01'}}});
+  const html=elements.get('intelligence-progress').innerHTML;
+  assert.match(html,/记录中的当前阶段/);
+  assert.match(html,/代码同步完成，待验证/);
+  assert.match(html,/材料自动汇总推断为“测试与验证”/);
+  assert.match(html,/框架版本不兼容/);
+  assert.match(html,/核对分支/);
+  assert.doesNotMatch(html,/当前没有来自项目资料的待处理问题/);
+});
+test('progress does not use unavailable context or silently hide long lists', () => {
+  const {c,elements}=intelligence(async()=>({}));
+  c.realRenderProgress({context:{available:false,project:{current_stage:'忽略'},known_issues:['忽略']},progress:{current_stage:'资料阶段',completed:Array.from({length:8},(_,i)=>`成果${i}`)}});
+  const html=elements.get('intelligence-progress').innerHTML;
+  assert.doesNotMatch(html,/忽略/);
+  assert.match(html,/资料推断阶段/);
+  assert.match(html,/展开其余 2 项/);
+  assert.match(html,/成果7/);
+});
+test('progress items escape source content and remove duplicate list markers', () => {
+  const {c}=intelligence(async()=>({}));
+  const html=c.progressItems(['- <script>unsafe</script>'],'');
+  assert.match(html,/&lt;script&gt;/);
+  assert.doesNotMatch(html,/<script>|<li>- /);
 });

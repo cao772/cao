@@ -237,18 +237,30 @@ function renderIntelligenceSummary(data) {
 
 function progressItems(items, emptyText) {
   if (!items?.length) return `<div class="intelligence-empty compact-empty">${escapeHtml(emptyText)}</div>`;
-  return `<ul class="progress-list">${items.slice(0, 6).map(item => `<li>${escapeHtml(intelligenceListText(item))}</li>`).join('')}</ul>`;
+  const list = values => `<ul class="progress-list">${values.map(item => `<li>${escapeHtml(intelligenceListText(item).replace(/^\s*[-*•]\s*/, ''))}</li>`).join('')}</ul>`;
+  return list(items.slice(0, 6)) + (items.length > 6
+    ? `<details class="progress-more"><summary>展开其余 ${items.length - 6} 项</summary>${list(items.slice(6))}</details>` : '');
 }
 
 function renderProgress(data) {
   const progress = data.progress || {};
-  const stage = progress.current_stage || '尚未形成明确阶段';
+  const context = data.context?.available === false ? {} : (data.context || {});
+  const recordedStage = context.project?.current_stage;
+  const inferredStage = progress.current_stage;
+  const stage = recordedStage || inferredStage || '尚未形成明确阶段';
+  const contextDate = dossierDate(context.modified_at || context.generated_at);
+  const materialDate = dossierDate(progress.source_status?.freshness_reference_date);
+  const source = recordedStage ? `项目认知记录 · 更新 ${contextDate}` : `材料自动汇总 · 资料日期 ${materialDate}`;
   intelligenceEls.progress.innerHTML = `
-    <div class="progress-stage"><span>当前阶段</span><strong>${escapeHtml(stage)}</strong></div>
-    <div class="progress-section"><strong>已完成</strong>${progressItems(progress.completed, '暂无可确认的已完成事项')}</div>
-    <div class="progress-section"><strong>进行中</strong>${progressItems(progress.in_progress, '当前没有已识别的明确任务')}</div>
-    <div class="progress-section"><strong>待处理问题</strong>${progressItems(progress.issues, '当前没有来自项目资料的待处理问题')}</div>
-    <div class="progress-section"><strong>下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步')}</div>`;
+    <div class="progress-stage"><span>${recordedStage ? '记录中的当前阶段' : '资料推断阶段'}</span><strong>${escapeHtml(stage)}</strong></div>
+    <div class="dossier-field-source">${escapeHtml(source)}；请结合实际工作核对，不代表验收结果。</div>
+    ${recordedStage && inferredStage && recordedStage !== inferredStage ? `<div class="dossier-stage-note">材料自动汇总推断为“${escapeHtml(inferredStage)}”（资料日期 ${escapeHtml(materialDate)}），与认知记录不同，尚待核对。</div>` : ''}
+    ${context.current_work?.length ? `<div class="progress-section"><strong>认知记录中的当前工作</strong><div class="dossier-field-source">更新 ${escapeHtml(contextDate)}；不代表正在执行的任务状态。</div>${progressItems(context.current_work, '')}</div>` : ''}
+    <div class="progress-section"><strong>资料摘录：已完成</strong>${progressItems(progress.completed, '尚未从已采集资料中提取到已完成事项，不代表项目没有成果。')}</div>
+    <div class="progress-section"><strong>资料摘录：进行中</strong>${progressItems(progress.in_progress, '尚未识别到明确的进行中任务，不代表无人开展工作。')}</div>
+    ${context.known_issues?.length ? `<div class="progress-section"><strong>认知记录中的已知问题</strong><div class="dossier-field-source">更新 ${escapeHtml(contextDate)}</div>${progressItems(context.known_issues, '')}</div>` : ''}
+    <div class="progress-section"><strong>资料摘录：待处理问题</strong>${progressItems(progress.issues, '已采集资料尚未提取到问题，不能据此判断项目没有问题。')}</div>
+    <div class="progress-section"><strong>资料摘录：下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步')}</div>`;
 }
 
 function repositoryLabel(repository) {
