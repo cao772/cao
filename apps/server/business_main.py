@@ -41,6 +41,9 @@ def _business_project_brief(project_id: str) -> dict:
     return brief
 
 
+# main.py registers these routes before business_main adds the production routers.
+# Patch the runtime functions those existing handlers look up instead of registering
+# duplicate FastAPI paths, which would leave the later handler unreachable.
 main_module.project_rollup = _people_aware_project_rollup
 main_module.project_brief = _business_project_brief
 

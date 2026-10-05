@@ -58,3 +58,17 @@ assert "/api/v1/projects/{project_id}/communications/summary" in paths
         text=True,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_production_routes_are_unique_and_include_integrated_capabilities():
+    script = r'''
+from collections import Counter
+import business_main
+pairs = [(method, route.path) for route in business_main.app.routes for method in getattr(route, "methods", set())]
+assert not [key for key, count in Counter(pairs).items() if count > 1]
+paths = business_main.app.openapi()["paths"]
+for path in ["/api/v1/projects", "/api/v1/projects/{project_id}/brief", "/api/v1/projects/{project_id}/intelligence", "/api/v1/search", "/api/v1/projects/{project_id}/communications/search", "/api/v1/projects/{project_id}/communications/summary", "/api/v1/industry-news"]:
+    assert "get" in paths[path], path
+'''
+    result = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr or result.stdout
