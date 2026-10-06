@@ -218,3 +218,36 @@ class ProjectIntelligenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_filename_catalog_search_returns_each_original_name_without_claiming_body_read():
+    index = {"path":"inventory/catalog-001.md","name":"catalog-001.md", "version_status":"current", "_search_segments":[
+        {"text":"- 模型评测一.md | 来源 inventory-source-01/模型评测一.md | 修改日期 2026-09-01","locator":"第5行"},
+        {"text":"- 模型评测二.md | 来源 inventory-source-01/模型评测二.md | 修改日期 2026-09-02","locator":"第6行"},
+        {"text":"- 越界评测.md | 来源 ../outside.md | 修改日期 2026-09-02","locator":"第7行"},
+    ]}
+    found = search_project_intelligence({"materials":[index]},"评测")
+    assert found["count"] == 2
+    assert {x["material"]["name"] for x in found["results"]} == {"模型评测一.md","模型评测二.md"}
+    assert all(x["material"]["metadata_only"] for x in found["results"])
+    assert all(x["material"]["version_status"] == "unknown" for x in found["results"])
+    assert all(x["location_type"] == "catalog_metadata" for x in found["results"])
+    assert all("正文" not in x["matched_fields"] for x in found["results"])
+    assert search_project_intelligence({"materials":[index]},"评测",current_only=True)["count"] == 0
+
+
+def test_original_indexed_material_wins_over_catalog_metadata_duplicate():
+    page = {"path":"inventory/catalog-001.md","_search_segments":[
+        {"text":"- 评测.md | 来源 documents/评测.md | 修改日期 2026-09-01","locator":"第5行"}]}
+    original = {"name":"评测.md","path":"documents/评测.md","_search_segments":[{"text":"评测结果已经通过","locator":"第2行"}]}
+    found=search_project_intelligence({"materials":[page,original]},"评测")
+    assert found["count"] == 1
+    assert found["results"][0]["snippet"] == "评测结果已经通过"
+    assert not found["results"][0]["material"].get("metadata_only")
+
+
+def test_unread_declared_material_is_also_marked_as_metadata_only():
+    intelligence=build_project_intelligence([snapshot(snapshot_id=1,observed_at='2026-10-06T00:00:00Z',files=[{'path':'docs/README.md','modified_at':'2026-10-01T00:00:00Z'}])],[],include_search_index=True)
+    found=search_project_intelligence(intelligence,'README.md')
+    assert found['results'][0]['material']['metadata_only'] is True
+    assert intelligence['summary']['search_indexed_file_count'] == 0

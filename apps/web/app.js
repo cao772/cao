@@ -418,7 +418,7 @@ function renderGlobalSearchResults(payload) {
       <strong>${escapeHtml(item.project_name)} · ${highlightEvidence(item.source_name || '未命名来源', payload.query)}</strong>
       ${item.snippet ? `<p>${highlightEvidence(item.snippet, payload.query)}</p>` : ''}
       ${item.matched_fields?.length ? `<small>命中：${escapeHtml(item.matched_fields.join('、'))}${item.locator ? ` · 位置：${escapeHtml(typeof item.locator === 'object' ? JSON.stringify(item.locator) : item.locator)}` : ''}</small>` : ''}
-      <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
+      <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : item.metadata_only ? '目录登记（未读取正文）' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
       <button type="button" data-global-search-open="${index}">在项目中查看</button>
     </article>`).join('') : '<div class="portfolio-empty">没有找到匹配内容。试试项目名、文件名或更短的业务关键词。</div>';
   els.globalSearchResults.querySelectorAll('[data-global-search-open]').forEach(button => button.addEventListener('click', async () => {

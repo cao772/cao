@@ -266,3 +266,13 @@ test('overview and copied brief use explicit stage records without promoting heu
   assert.match(stage.note,/需结合实际工作核对/);
   assert.equal(c.briefStage({current_stage:'测试与验证'}).label,'资料推断阶段');
 });
+
+
+test('global search labels filename-only hits without claiming original content was read', () => {
+  const c=app(async () => response({}));
+  vm.runInContext('els.globalSearchResults.querySelectorAll = () => []',c);
+  c.renderGlobalSearchResults({query:'report',count:1,results:[{project_name:'Project',source_name:'report.md',source_path:'inventory-source-01/report.md',source_type:'material',metadata_only:true,snippet:'仅登记文件名'}]});
+  const html=vm.runInContext('els.globalSearchResults.innerHTML',c);
+  assert.match(html,/目录登记（未读取正文）/);
+  assert.match(html,/inventory-source-01\/report.md/);
+});

@@ -383,7 +383,7 @@ function renderSearchResults(payload) {
   const contentHint = payload.content_search_available
     ? `已建立 ${payload.search_indexed_file_count || 0} 份材料正文索引，可定位正文位置。`
     : '当前可搜索文件名、路径、用途和已抽取摘要；若需正文定位，请在平台配置中启用“本机读取资料内容”。';
-  intelligenceEls.searchStatus.textContent = `找到 ${payload.count || 0} 项。${contentHint}`;
+  intelligenceEls.searchStatus.textContent = `找到 ${payload.count || 0} 项。${contentHint}${payload.inventory_index_file_count ? ` 另有 ${payload.inventory_index_file_count} 页文件名索引，仅登记目录元数据。` : ''}`;
   if (!results.length) {
     intelligenceEls.searchResults.innerHTML = '<div class="intelligence-empty">没有找到匹配材料。可以尝试文件名、编号、金额、功能名称、合同条款或正文关键词。</div>';
     return;
@@ -402,7 +402,7 @@ function renderSearchResults(payload) {
       </div>
       ${item.snippet ? `<div class="search-result-snippet">${escapeHtml(item.snippet)}</div>` : ''}
       <div class="search-result-footer">
-        <span>${escapeHtml(material.material_type_label || '其他资料')}</span>
+        <span>${escapeHtml(material.metadata_only ? '目录登记（未读取正文）' : material.material_type_label || '其他资料')}</span>
         ${locator ? `<span>${escapeHtml(locator)}</span>` : ''}
         ${purpose ? `<span>${escapeHtml(purpose)}</span>` : ''}
         <span>最近修改 ${escapeHtml(intelligenceDate(material.modified_at))}</span>
