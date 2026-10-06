@@ -222,6 +222,15 @@ def _project_action(command: str, projects: list[dict[str, Any]]) -> tuple[str, 
     return _project_id(first, projects), action.strip() or "概览"
 
 
+def _original_materials(materials):
+    def inventory_page(item):
+        path = str(item.get("path") or "")
+        name = path.removeprefix("inventory/")
+        return path.startswith("inventory/") and (name == "LOCAL_PROJECT_INVENTORY.md" or
+            (name.startswith("catalog-") and name.endswith(".md") and name[8:-3].isdigit()))
+    return [item for item in materials or [] if isinstance(item, dict) and not inventory_page(item)]
+
+
 def _code_repositories(repositories):
     return [repo for repo in repositories or [] if isinstance(repo, dict)
             and repo.get("role") != "materials" and not str(repo.get("url") or "").lower().startswith("file:")]
@@ -350,11 +359,12 @@ def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
     materials = result.get("materials") or []
     if not isinstance(materials, list):
         raise ValueError("项目材料格式错误")
-    current = [m for m in materials if isinstance(m, dict) and m.get("version_status") in
+    originals = _original_materials(materials)
+    current = [m for m in originals if m.get("version_status") in
                {"current", "latest_period", "primary", "active_related", "single"}]
-    listed = sorted(current or [m for m in materials if isinstance(m, dict)],
+    listed = sorted(current or originals,
                     key=lambda m: str(m.get("modified_at") or ""), reverse=True)[:5]
-    lines = [f"{name}：已识别 {summary.get('material_count', len(materials))} 份资料，以下为当前/最新材料："]
+    lines = [f"{name}：已登记 {len(originals)} 份原材料元数据，另有 {len(materials)-len(originals)} 页目录索引；以下按材料版本及修改日期列出："]
     for material in listed:
         modified = str(material.get("modified_at") or "")[:10]
         lines.append(f"• {_short(material.get('name') or material.get('path'), 95)}"
@@ -478,7 +488,7 @@ def _intelligence_facts(project_id: str) -> dict[str, Any]:
             repositories.append({**{key: raw.get(key) for key in ("id", "role", "provider", "branch", "head")},
                                  "url": _safe_repo_url(raw.get("url"))})
     current_statuses = {"current", "latest_period", "primary", "active_related", "single"}
-    materials = [item for item in data.get("materials") or [] if isinstance(item, dict)]
+    materials = _original_materials(data.get("materials"))
     materials.sort(key=lambda item: (item.get("version_status") in current_statuses,
                                      str(item.get("modified_at") or "")), reverse=True)
     selected_materials = [

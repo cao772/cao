@@ -343,3 +343,13 @@ def test_mobile_reply_limit_includes_truncation_notice_for_unbroken_text():
     reply=gateway._mobile_reply('长'*3000,1700)
     assert len(reply)==1700 and '已截取' in reply
     assert len(gateway._mobile_reply('长'*30,5))==5
+
+
+def test_mobile_material_list_does_not_promote_generated_catalog_pages():
+    data={'profile':{},'context':{},'summary':{'material_count':3},'materials':[
+        {'name':'catalog-001.md','path':'inventory/catalog-001.md','version_status':'single','modified_at':'2026-10-06'},
+        {'name':'LOCAL_PROJECT_INVENTORY.md','path':'inventory/LOCAL_PROJECT_INVENTORY.md','version_status':'single'},
+        {'name':'原需求.md','path':'docs/原需求.md','version_status':'single','modified_at':'2026-09-01','metadata_only':True}]}
+    reply=gateway._intelligence_reply('Project','材料',data)
+    assert '原需求.md' in reply and 'catalog-001.md' not in reply and 'LOCAL_PROJECT_INVENTORY.md' not in reply
+    assert '1 份原材料元数据，另有 2 页目录索引' in reply
