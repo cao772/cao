@@ -132,10 +132,24 @@ def _lower(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().lower()
 
 
+def is_material_template(text: Any) -> bool:
+    value = _lower(text).strip("#* -：:。.")
+    if value in {"下一步", "下一步工作计划", "下一步计划", "工作计划", "待办事项", "任务清单", "功能清单"}:
+        return True
+    if "编号" in value and sum(marker in value for marker in ("业务架构", "应用架构", "功能清单", "业务流程清单")) >= 2:
+        return True
+    # Specification templates describe software behavior, not unfinished work.
+    return "输入：" in value and "操作与处理：" in value
+
+
 def classify_candidate(text: Any, *, hint: str | None = None) -> str:
     value = _lower(text)
     if not value:
         return "unknown"
+
+    # Task IDs embedded in table headings are column metadata, not tasks.
+    if is_material_template(value):
+        return "informational"
 
     if any(marker in value for marker in CANCEL_MARKERS):
         return "completion_record"

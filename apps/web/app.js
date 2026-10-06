@@ -152,10 +152,26 @@ function dailyFocusItems(rows) {
     const textOf = value => typeof value === 'string' ? value : value?.text || value?.title || '';
     const issues = [...new Set((row.brief?.issues || []).map(textOf).filter(Boolean))];
     const nextSteps = [...new Set((row.brief?.next_steps || []).map(textOf).filter(Boolean))];
+    const historical = [];
     if (row.briefError || row.intelligenceError) items.push({ row, priority: 0, kind: '来源异常', text: '部分项目资料读取失败，请打开项目核对或刷新重试。' });
-    for (const issue of issues) items.push({ row, priority: 1, kind: '待核对问题', text: issue });
-    for (const next of nextSteps) items.push({ row, priority: 2, kind: '可推进事项', text: next });
-    if (age === null || age > 14) items.push({ row, priority: 3, kind: '资料待更新', text: age === null ? '资料日期未知，请核对当前背景与进展。' : `资料距今 ${age} 天，请核对上述事项是否仍然有效。` });
+    const add = (text, priority, kind, evidence) => {
+      const source = evidence?.find(item => item.text === text);
+      // An explicit undated source stays unknown; unrelated newer documents
+      // must not rejuvenate this fact. Legacy servers retain the prior fallback.
+      const sourceDate = source ? source.source_date || null : date;
+      const sourceAge = portfolioAgeDays(sourceDate);
+      const item = { row, priority, kind, text, sourceDate };
+      if (sourceAge !== null && sourceAge > 14) historical.push(item);
+      else items.push(item);
+    };
+    for (const issue of issues) add(issue, 1, '待核对问题', row.brief?.issue_evidence);
+    for (const next of nextSteps) add(next, 2, '可推进事项', row.brief?.next_step_evidence);
+    if (historical.length) {
+      const dates = historical.map(item => item.sourceDate).sort();
+      items.push({ row, priority: 3, kind: '历史事项待核对', sourceDate: dates[dates.length - 1], evidenceKey: historical.map(item => [item.text, item.sourceDate]).sort((a, b) => a[0].localeCompare(b[0])),
+        text: `${historical.length} 条事项来自超过 14 天前的资料；请先核对是否仍然有效。原文和依据保留在项目进展中。` });
+    }
+    if (!historical.length && (age === null || age > 14)) items.push({ row, priority: 3, kind: '资料待更新', sourceDate: date, text: age === null ? '资料日期未知，请核对当前背景与进展。' : `资料距今 ${age} 天，请核对上述事项是否仍然有效。` });
   }
   return items.sort((a, b) => a.priority - b.priority);
 }
@@ -172,7 +188,7 @@ function readFocusTracking() {
 }
 async function focusIdentity(item) {
   // Age in days changes daily; source date, not age, identifies a stale-source reminder.
-  const identity = [item.row.project.project_id, item.kind, portfolioSourceDate(item.row), item.priority === 3 ? '' : item.text];
+  const identity = [item.row.project.project_id, item.kind, item.sourceDate === undefined ? portfolioSourceDate(item.row) : item.sourceDate, item.evidenceKey || (item.priority === 3 ? '' : item.text)];
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(identity)));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -218,7 +234,7 @@ async function renderDailyFocus(rows) {
   target.innerHTML = visible.length ? displayed.map(item => `<article class="daily-focus-item">
     <div><span class="badge ${item.priority < 2 ? 'warn' : 'neutral'}">${escapeHtml(item.kind)}</span><strong>${escapeHtml(projectLabel(item.row.project))}</strong></div>
     <p>${escapeHtml(item.text)}</p>
-    <small>资料日期：${escapeHtml(portfolioDate(portfolioSourceDate(item.row)))}</small>
+    <small>资料日期：${escapeHtml(portfolioDate(item.sourceDate === undefined ? portfolioSourceDate(item.row) : item.sourceDate))}</small>
     ${item.status !== 'open' ? `<small>${item.status === 'done' ? '已处理此提醒（不代表项目问题已解决）' : '明天重新提醒'}</small>` : ''}
     <div class="focus-actions"><button type="button" class="secondary-button" data-focus-project="${escapeHtml(item.row.project.project_id)}">查看依据与进展</button>
     ${item.status === 'open' ? `<button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="done">已处理</button><button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="snooze">明天再看</button>` : `<button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="restore">恢复关注</button>`}</div>
@@ -232,6 +248,20 @@ async function renderDailyFocus(rows) {
       showToast('跟进状态已保存到当前浏览器');
     } catch { showToast('浏览器不允许保存，跟进状态未更改。请检查浏览器存储设置。', true); }
   }));
+}
+
+function portfolioGroup(row) {
+  return String(row.intelligence?.profile?.team || '').trim();
+}
+function portfolioMatches(row, query, group = '') {
+  const brief = row.brief || {};
+  const knowledge = row.intelligence || {};
+  const selectedGroup = group === '__ungrouped__' ? !portfolioGroup(row)
+    : !group || portfolioGroup(row) === group.slice(5);
+  const fields = [row.project.project_id, projectLabel(row.project), knowledge.profile?.description,
+    knowledge.profile?.owner, portfolioGroup(row), knowledge.context?.project?.purpose,
+    knowledge.context?.project?.current_stage, brief.current_stage, ...(brief.next_steps || [])];
+  return selectedGroup && fields.some(value => String(value || '').toLocaleLowerCase().includes(query));
 }
 
 function renderPortfolio() {
@@ -257,13 +287,15 @@ function renderPortfolio() {
   els.portfolioStatus.textContent = `${status}${oldSourceCount ? ` ${oldSourceCount} 个项目资料超过 14 天，建议核对。` : ''}${unknownSourceCount ? ` ${unknownSourceCount} 个项目资料时间未知。` : ''}`;
 
   const query = els.portfolioSearch.value.trim().toLocaleLowerCase();
-  let filtered = rows.filter(row => {
-    const brief = row.brief || {};
-    const knowledge = row.intelligence || {};
-    return [projectLabel(row.project), knowledge.profile?.description, knowledge.context?.project?.purpose,
-      knowledge.context?.project?.current_stage, brief.current_stage, ...(brief.next_steps || [])]
-      .some(value => String(value || '').toLocaleLowerCase().includes(query));
-  });
+  const groupSelect = document.getElementById('portfolio-group');
+  const selectedGroup = groupSelect.value || '';
+  const groups = [...new Set(rows.map(portfolioGroup).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  groupSelect.innerHTML = '<option value="">全部分组 / 团队</option>'
+    + groups.map(group => `<option value="${escapeHtml(`team:${group}`)}">${escapeHtml(group)}</option>`).join('')
+    + (rows.some(row => !portfolioGroup(row)) ? '<option value="__ungrouped__">未分组</option>' : '');
+  groupSelect.value = selectedGroup;
+  const group = groupSelect.value || '';
+  let filtered = rows.filter(row => portfolioMatches(row, query, group));
   if (document.getElementById('portfolio-attention').checked) {
     filtered = filtered.filter(row => row.project.project_state === 'attention' || row.brief?.issues?.length || row.briefError || row.intelligenceError);
   }
@@ -292,6 +324,7 @@ function renderPortfolio() {
     return `<article class="portfolio-card">
       <div class="portfolio-card-head"><span class="portfolio-card-id">${escapeHtml(project.project_id)}</span><span class="badge ${tone}">${escapeHtml(project.project_state_label || '状态待确认')}</span></div>
       <h4>${escapeHtml(projectLabel(project))}</h4>
+      ${portfolioGroup(row) ? `<span class="badge neutral">${escapeHtml(portfolioGroup(row))}</span>` : ''}
       <p class="portfolio-card-description">${escapeHtml(description)}</p>
       <div class="portfolio-focus"><span>当前阶段</span><strong>${escapeHtml(stage)}</strong></div>
       <div class="portfolio-focus next"><span>下一步</span><strong title="${escapeHtml(next)}">${escapeHtml(next)}</strong></div>
@@ -470,7 +503,7 @@ function renderOverview(project, detail) {
     metric('参与人员', contributorCount, localCount ? `${localCount} 人已接入本地工作区` : '根据项目仓库活动识别'),
     metric('进行中任务', summary.in_progress_task_count ?? 0, `${summary.planned_task_count ?? 0} 项明确待办`),
     metric('待处理问题', issueCount, issueCount ? '需要继续跟进' : '当前未识别到明确问题'),
-    metric('本周提交', summary.weekly_commit_count ?? 0, `${summary.weekly_merge_count ?? 0} 次代码合并`),
+    metric('本周提交', summary.weekly_commit_count ?? 0, `${summary.weekly_merge_count ?? 0} 次代码合并${brief.statistics_period?.timezone ? ` · ${brief.statistics_period.timezone} 自然周` : ''}`),
   ].join('');
 }
 
@@ -912,7 +945,7 @@ els.portfolioRefresh.addEventListener('click', async () => {
   }
 });
 
-for (const id of ['portfolio-attention', 'portfolio-sort']) document.getElementById(id).addEventListener('change', renderPortfolio);
+for (const id of ['portfolio-attention', 'portfolio-sort', 'portfolio-group']) document.getElementById(id).addEventListener('change', renderPortfolio);
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
@@ -930,7 +963,7 @@ document.getElementById('copy-project-brief').addEventListener('click', async ()
       lines.push(`\n${label}`, ...(brief[key] || []).map(item => `• ${typeof item === 'string' ? item : item.text || item.title || JSON.stringify(item)}`));
       if (!brief[key]?.length) lines.push('尚未识别');
     }
-    lines.push('\n依据已采集资料整理，未调用大模型；请结合资料日期核对。');
+    lines.push('\n依据已采集资料自动汇总；请结合来源与资料日期核对，不代表最新验收状态。');
     await navigator.clipboard.writeText(lines.join('\n'));
     showToast('项目简报已复制，可粘贴到微信或文档');
   } catch (error) { showToast(`复制失败：${error.message}`, true); }

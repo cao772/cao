@@ -47,15 +47,29 @@ test('historical weeks never masquerade as this week or last week', () => {
   assert.equal(c.weekLabel('2020-01-06', 0), '1月6日 – 1月12日');
   assert.match(c.weekLabel(c.dateKey(c.weekStart(new Date())), 9), /^本周/);
 });
-test('daily focus surfaces failures first and preserves stale evidence labels', () => {
+test('daily focus coalesces old facts without representing them as current problems', () => {
   const c = app(async () => response({}));
   const items = c.dailyFocusItems([
-    { project: { project_id: 'p1' }, brief: { issues: ['Needs review'], source_status: { freshness_reference_date: '2020-01-01' } } },
+    { project: { project_id: 'p1' }, brief: { issues: ['Needs review', 'Old issue'], next_steps: ['Old next step'], source_status: { freshness_reference_date: '2020-01-01' } } },
     { project: { project_id: 'p2' }, briefError: true },
   ]);
   assert.equal(items[0].kind, '来源异常');
-  assert.equal(items[1].text, 'Needs review');
-  assert.equal(items.filter(item => item.kind === '资料待更新').length, 2);
+  assert.equal(items.filter(item => item.kind === '历史事项待核对').length, 1);
+  assert.match(items.find(item => item.kind === '历史事项待核对').text, /3 条/);
+  assert.equal(items.filter(item => item.kind === '待核对问题').length, 0);
+  assert.equal(items.filter(item => item.kind === '资料待更新').length, 1);
+});
+test('each fact keeps its own date even when another source is recent', () => {
+  const c = app(async () => response({}));
+  const today = new Date().toISOString().slice(0, 10);
+  const items = c.dailyFocusItems([{ project: { project_id: 'p' }, brief: {
+    issues: ['old issue', 'new issue', 'undated issue'],
+    issue_evidence: [{text:'old issue',source_date:'2020-01-01'}, {text:'new issue',source_date:today}, {text:'undated issue',source_date:null}],
+    source_status: {freshness_reference_date:today},
+  }}]);
+  assert.equal(items.filter(item => item.kind === '待核对问题').length, 2);
+  assert.equal(items.find(item => item.text === 'undated issue').sourceDate, null);
+  assert.equal(items.find(item => item.kind === '历史事项待核对').sourceDate, '2020-01-01');
 });
 
 test('handling survives reload, stores no project text, and can be restored', async () => {
@@ -220,4 +234,25 @@ test('local material sources do not inflate linked code repository counts', () =
   ]);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].url, 'https://github.com/example/project.git');
+});
+
+
+test('new historical evidence reopens a handled review even with the same source date', async () => {
+  const c = app(async () => response({}));
+  const row = issues => ({project:{project_id:'p'},brief:{issues,source_status:{freshness_reference_date:'2020-01-01'}}});
+  const old = c.dailyFocusItems([row(['old issue'])])[0];
+  const fresh = c.dailyFocusItems([row(['different issue'])])[0];
+  assert.notEqual(await c.focusIdentity(old), await c.focusIdentity(fresh));
+  const reordered = c.dailyFocusItems([row(['second','first'])])[0];
+  const stable = c.dailyFocusItems([row(['first','second'])])[0];
+  assert.equal(await c.focusIdentity(reordered), await c.focusIdentity(stable));
+});
+test('portfolio filtering searches identifiers, owners and exact groups without guessing categories', () => {
+  const c = app(async () => response({}));
+  const row = {project:{project_id:'stereo-distance',project_name:'Vision'},intelligence:{profile:{team:'研究原型',owner:'alice'}}};
+  assert.equal(c.portfolioMatches(row,'stereo','team:研究原型'),true);
+  assert.equal(c.portfolioMatches(row,'alice','team:研究原型'),true);
+  assert.equal(c.portfolioMatches(row,'','team:业务项目'),false);
+  assert.equal(c.portfolioMatches(row,'','__ungrouped__'),false);
+  assert.equal(c.portfolioMatches({project:{project_id:'p'}},'','__ungrouped__'),true);
 });

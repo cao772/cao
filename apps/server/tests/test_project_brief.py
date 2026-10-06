@@ -192,3 +192,45 @@ def test_newer_metric_family_wins_and_weekly_progress_is_grouped():
     assert all("227项" not in item for item in brief["latest_metrics"])
     assert brief["weekly_progress"][0]["week_key"] == "2026-W36"
     assert "完成1431条样本验证" in brief["weekly_progress"][0]["completed"]
+
+
+def test_issue_records_reject_headers_and_success_negation_but_keep_real_failures():
+    record = snapshot({
+        "blockers": [
+            {"text": "存在问题"}, {"text": "问题清单："},
+            {"text": "验证批次无失败、无异常"},
+            {"text": "回归 272 passed, 0 failed, 0 errors"},
+            {"text": "正式接口仍待确认", "path": "minutes.md", "source_date": "2026-10-01"},
+        ],
+        "tests": [{"text": "272 passed，但上线失败"},
+                  {"text": "0 passed, 3 failed"},
+                  {"text": "272 passed，异常处理功能覆盖通过"}],
+    })
+    brief = build_project_brief([record], {"work_items": []})
+    assert brief["issues"] == ["正式接口仍待确认", "272 passed，但上线失败", "0 passed, 3 failed"]
+    assert brief["issue_evidence"][0]["path"] == "minutes.md"
+    assert brief["issue_evidence"][0]["source_date"] == "2026-10-01"
+    assert brief["issue_evidence"][1]["source_date"] is None
+
+
+def test_next_steps_do_not_promote_template_headers_or_ui_behavior_to_todos():
+    template = "需求编号 业务架构 （依据 BA-01填写） 应用架构 功能清单"
+    behavior = "输入：选择中断批次。操作与处理：确认继续执行未完成验证。"
+    brief = build_project_brief([snapshot({"tasks":[{"text":"下一步工作计划"}, {"text":behavior}, {"text":"下一步完成接口回归"}]})],
+        {"work_items":[{"title":template,"task_id":"BA-02","status":"planned"}]})
+    assert brief["next_steps"] == ["下一步完成接口回归"]
+    assert brief["summary"]["planned_task_count"] == 0
+
+
+def test_this_week_uses_calendar_boundary_and_rejects_future_events():
+    now = datetime(2026,10,6,6,0,tzinfo=timezone.utc)
+    events = [{"event_type":"git.commit", "commit_sha":sha,"observed_at":stamp}
+              for sha,stamp in [("last-week","2026-10-04T23:59:59Z"),
+                                ("boundary","2026-10-05T00:00:00Z"),
+                                ("today","2026-10-06T05:00:00Z"),
+                                ("future","2026-10-06T07:00:00Z")]]
+    brief = build_project_brief([], {"work_items":[]}, events, now=now)
+    assert brief["summary"]["weekly_commit_count"] == 2
+    assert brief["summary"]["today_activity_count"] == 1
+    assert brief["statistics_period"]["week_start"] == "2026-10-05"
+    assert brief["statistics_period"]["timezone"] == "UTC"

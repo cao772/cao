@@ -5,6 +5,8 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from task_lifecycle import is_material_template
+
 
 NEGATIVE_MARKERS = ("失败", "不通过", "未通过", "异常", "错误", "failed", "failure", "error")
 COMPLETE_MARKERS = ("已完成", "完成", "已通过", "通过", "已上线", "上线完成", "已交付", "验收通过")
@@ -81,10 +83,18 @@ def _contains_negative(text: str) -> bool:
         return False
     if re.search(r"\b[1-9]\d*\s+(?:failed|errors?)\b", lower):
         return True
-    if re.search(r"\b\d+\s+passed\b", lower) and not re.search(r"仍有|尚有", lower):
-        return False
-    lower = re.sub(r"无失败|无超时|没有失败|失败回滚|失败反馈|错误处理|异常处理|定额错误|定额套用错误", "", lower)
+    lower = re.sub(r"无失败|无超时|没有失败|无异常|无错误|未发现异常|未发现错误|失败回滚|失败反馈|错误处理|异常处理|定额错误|定额套用错误|\b0\s+(?:failed|failures?|errors?)\b", "", lower)
     return any(marker in lower for marker in NEGATIVE_MARKERS)
+
+
+def _is_issue_record(text: str) -> bool:
+    if re.fullmatch(r"[#*\s]*?(?:存在问题|当前问题|问题清单|待处理问题|问题|无问题|暂无问题|未发现问题)[：:。.\s]*", text):
+        return False
+    # The collector may classify a successful test as a blocker merely because
+    # it contains “failed” or “异常处理”. Keep concrete pending/blocking clauses.
+    if any(marker in text.lower() for marker in NEGATIVE_MARKERS) and not _contains_negative(text):
+        return bool(re.search(r"仍|尚|阻塞|无法|待确认|待处理|需.*(?:确认|处理)", text))
+    return True
 
 
 def _is_pending(text: str) -> bool:
@@ -164,7 +174,7 @@ def _next_lines(values: list[Any]) -> list[str]:
     result: list[str] = []
     for value in values:
         text = _text(value)
-        if text and _is_pending(text):
+        if text and _is_pending(text) and not is_material_template(text):
             result.append(text)
     return _dedupe(result, 12)
 
@@ -174,7 +184,7 @@ def _work_items(fusion: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _remote_counts(remote_events: list[dict[str, Any]], now: datetime) -> dict[str, int]:
-    week_start = now - timedelta(days=7)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     today = now.date()
     weekly_commits: set[str] = set()
     weekly_pushes = 0
@@ -184,7 +194,7 @@ def _remote_counts(remote_events: list[dict[str, Any]], now: datetime) -> dict[s
 
     for event in remote_events:
         observed = _parse_time(event.get("observed_at"))
-        if observed is None:
+        if observed is None or observed > now:
             continue
         if observed.date() == today:
             today_activity += 1
@@ -436,7 +446,8 @@ def build_project_brief(
     planned_items = [item for item in work_items if str(item.get("status") or "") == "planned"]
     confirmed_planned = [
         item for item in planned_items
-        if item.get("task_id") or str(item.get("origin") or "") == "agent"
+        if (item.get("task_id") or str(item.get("origin") or "") == "agent")
+        and not is_material_template(item.get("title"))
     ]
 
     completed = _completed_progress(progress)
@@ -448,7 +459,7 @@ def build_project_brief(
         in_progress = [_text(value) for value in tasks_from_docs + progress if "进行中" in _text(value) and not _is_pending(_text(value))]
     in_progress = _dedupe(in_progress, 12)
 
-    issue_lines = list(blockers)
+    issue_lines = [line for line in blockers if _is_issue_record(line)]
     issue_lines.extend(_text(item.get("title") or item.get("task_id")) for item in attention_items)
     for test in tests:
         if _contains_negative(test):
@@ -499,6 +510,7 @@ def build_project_brief(
         "completed": completed,
         "in_progress": in_progress,
         "issues": issues,
+        "issue_evidence": _source_refs(workspace_snapshots, ("blockers", "tests"), issues),
         "next_steps": next_steps,
         "next_step_evidence": next_step_evidence,
         "latest_metrics": metrics,
@@ -515,6 +527,11 @@ def build_project_brief(
             "local_uncommitted_workspace_count": local_uncommitted_count,
             "agent_activity_count": len(agent_events),
             **remote_counts,
+        },
+        "statistics_period": {
+            "timezone": "UTC",
+            "week_start": (now - timedelta(days=now.weekday())).date().isoformat(),
+            "through": now.isoformat(),
         },
         "source_status": {
             "workspace_count": len(workspace_snapshots),
