@@ -63,3 +63,20 @@ class DocumentPipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_inventory_catalog_is_searchable_without_inferred_business_issues(tmp_path):
+    from project_search_index import build_project_search_index
+    catalog = tmp_path / 'inventory.md'
+    catalog.write_text('项目背景：质量评价问题闭环资料。\n材料：历史问题清单.xlsx\n', encoding='utf-8')
+    manifest = {
+        'project': {'id': 'catalog'},
+        'security': {'mode': 'local_analysis'},
+        'paths': {'documents': ['inventory.md']},
+        'analysis': {'enabled': True, 'use_llm': False, 'include': ['documents'], 'summary_excluded_paths': ['inventory.md']},
+    }
+    analyzed = analyze_project_files(tmp_path, manifest, tmp_path / 'state')
+    assert analyzed['items'] == []
+    indexed = build_project_search_index(tmp_path, manifest)
+    assert indexed['enabled'] and len(indexed['items']) == 1
+    assert any('历史问题清单' in segment['text'] for segment in indexed['items'][0]['segments'])

@@ -541,6 +541,11 @@ def analyze_project_files(
             stats["io_error"] += 1
             continue
 
+        # Directory catalogs remain searchable, but file titles and background
+        # descriptions must not become inferred business tasks or blockers.
+        if relative in (analysis_cfg.get("summary_excluded_paths") or []):
+            stats["summary_excluded"] += 1
+            continue
         seen_paths.add(relative)
         role = classify_role(relative, category)
         role_counts[role] += 1

@@ -69,6 +69,10 @@ async function api(path) {
   return request;
 }
 
+function registeredCodeRepositories(repositories) {
+  return (repositories || []).filter(item => item.role !== 'materials' && !String(item.url || '').startsWith('file:'));
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -236,13 +240,13 @@ function renderPortfolio() {
   const incomplete = rows.some(row => row.briefError || row.intelligenceError);
   const complete = rows.filter(row => !row.briefError && !row.intelligenceError).length;
   const materialRows = rows.filter(row => row.intelligence);
-  const repoCount = materialRows.reduce((sum, row) => sum + (row.intelligence.profile?.repositories?.length || 0), 0);
+  const repoCount = materialRows.reduce((sum, row) => sum + registeredCodeRepositories(row.intelligence.profile?.repositories).length, 0);
   const materialCount = materialRows.reduce((sum, row) => sum + (row.intelligence.summary?.material_count || 0), 0);
   const attentionCount = state.projects.filter(project => project.project_state === 'attention').length;
   const oldSourceCount = rows.filter(row => (portfolioAgeDays(portfolioSourceDate(row)) ?? 0) > 14).length;
   const unknownSourceCount = rows.filter(row => !portfolioSourceDate(row)).length;
   els.portfolioOverview.innerHTML = [
-    portfolioStat('业务项目', state.projects.length, '当前已接入'),
+    portfolioStat('登记项目与资料', state.projects.length, '当前已接入'),
     portfolioStat('需要关注', attentionCount, '根据项目采集状态', attentionCount > 0),
     portfolioStat('已识别资料', materialRows.length ? materialCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
     portfolioStat('关联仓库', materialRows.length ? repoCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
@@ -280,7 +284,7 @@ function renderPortfolio() {
     const next = String(nextRaw).replace(/^\s*[-*•]\s*/, '');
     const issueCount = brief.issues?.length;
     const materialCount = knowledge.summary?.material_count;
-    const repositories = knowledge.profile?.repositories?.length;
+    const repositories = registeredCodeRepositories(knowledge.profile?.repositories).length;
     const groups = knowledge.communications?.group_count;
     const sourceDate = portfolioSourceDate(row);
     const sourceAge = portfolioAgeDays(sourceDate);

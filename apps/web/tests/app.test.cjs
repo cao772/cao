@@ -211,3 +211,13 @@ test('opening industry news during initial project load keeps that view open', a
   finishHealth(response({status:'ok'}));
   assert.equal(await loading,true);
 });
+test('local material sources do not inflate linked code repository counts', () => {
+  const c = app(async () => response({}));
+  const rows = c.registeredCodeRepositories([
+    { role: 'materials', url: 'file:///local/materials' },
+    { role: 'application', url: 'file:///local/docs' },
+    { role: 'application', url: 'https://github.com/example/project.git' },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].url, 'https://github.com/example/project.git');
+});

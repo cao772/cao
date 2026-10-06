@@ -170,7 +170,7 @@ function renderDossier(data) {
         ${stageEvidenceHtml}
       </div>
       <div class="dossier-field"><div class="dossier-field-label">资料中的下一步</div><div class="dossier-field-value">${escapeHtml(next)}</div><div class="dossier-field-source${nextAge === null || nextAge > 14 ? ' warn' : ''}">${escapeHtml(nextOrigin)} · 资料日期 ${escapeHtml(dossierDate(nextDate))} · 本地采集 ${escapeHtml(dossierDate(nextRef.observed_at || profile.observed_at))}${nextAge > 14 ? ` · 距今 ${nextAge} 天，是否仍待办需确认` : ''}</div></div>
-      <div class="dossier-field"><div class="dossier-field-label">登记负责人</div><div class="dossier-field-value">${escapeHtml(profile.owner || '未登记')}</div><div class="dossier-field-source">项目档案 · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}；已关联 ${profile.repositories?.length || 0} 个仓库</div></div>
+      <div class="dossier-field"><div class="dossier-field-label">登记负责人</div><div class="dossier-field-value">${escapeHtml(profile.owner || '未登记')}</div><div class="dossier-field-source">项目档案 · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}；已关联 ${registeredCodeRepositories(profile.repositories).length} 个仓库</div></div>
     </div>
     <div class="dossier-subgrid">
       <div class="dossier-section"><h4>可追溯的事实摘录</h4><p class="dossier-section-note">记录原始链接或材料路径。摘录不等于已完成验收。</p>
@@ -276,6 +276,9 @@ function renderRepositories(data) {
     return;
   }
   intelligenceEls.repositories.innerHTML = `<div class="repository-list">${repositories.map(repository => {
+    if (repository.role === 'materials' || String(repository.url || '').startsWith('file:')) {
+      return `<div class="repository-item"><div><strong>本地资料来源</strong><div class="intelligence-list-path">${escapeHtml(repository.url || '')}</div></div><div class="repository-meta"><span>未绑定 Git 仓库</span><span>仅登记资料目录，不表示存在分支、提交或上游同步</span></div></div>`;
+    }
     const provider = repository.provider || '本机';
     const branch = repository.branch || '未识别分支';
     const head = repository.head ? String(repository.head).slice(0, 10) : '未识别 SHA';
