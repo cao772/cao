@@ -256,3 +256,13 @@ test('portfolio filtering searches identifiers, owners and exact groups without 
   assert.equal(c.portfolioMatches(row,'','__ungrouped__'),false);
   assert.equal(c.portfolioMatches({project:{project_id:'p'}},'','__ungrouped__'),true);
 });
+
+
+test('overview and copied brief use explicit stage records without promoting heuristic inference', () => {
+  const c = app(async () => response({}));
+  const stage = c.briefStage({current_stage:'测试与验证',recorded_stage:{stage:'业务阶段待核实',modified_at:'2026-10-01'}});
+  assert.equal(stage.value,'业务阶段待核实');
+  assert.equal(stage.label,'记录中的阶段');
+  assert.match(stage.note,/需结合实际工作核对/);
+  assert.equal(c.briefStage({current_stage:'测试与验证'}).label,'资料推断阶段');
+});

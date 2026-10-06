@@ -415,6 +415,25 @@ def _source_refs(snapshots: list[dict[str, Any]], keys: tuple[str, ...], lines: 
     return refs
 
 
+def _recorded_stage(snapshots: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = []
+    for snapshot in snapshots:
+        payload = snapshot.get("payload") or {}
+        # Central v1 stores the same collector data under files for compatibility.
+        intelligence = payload.get("project_intelligence") or (payload.get("files") or {}).get("project_intelligence") or {}
+        context = intelligence.get("context") or {}
+        if context.get("valid") is not True:
+            continue
+        data = context.get("data") or {}
+        project = data.get("project") or {}
+        stage = project.get("current_stage")
+        if not isinstance(stage, str) or not stage.strip():
+            continue
+        candidates.append({"stage": stage.strip(), "path": context.get("path"),
+                           "modified_at": context.get("modified_at"), "observed_at": snapshot.get("observed_at")})
+    return max(candidates, key=lambda item: _parse_time(item["modified_at"]) or _parse_time(item["observed_at"]) or datetime.min.replace(tzinfo=timezone.utc)) if candidates else None
+
+
 def build_project_brief(
     workspace_snapshots: list[dict[str, Any]],
     fusion: dict[str, Any],
@@ -506,6 +525,7 @@ def build_project_brief(
     return {
         "version": 2,
         "current_stage": stage,
+        "recorded_stage": _recorded_stage(workspace_snapshots),
         "current_stage_basis": stage_basis,
         "completed": completed,
         "in_progress": in_progress,

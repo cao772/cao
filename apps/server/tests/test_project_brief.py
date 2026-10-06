@@ -234,3 +234,22 @@ def test_this_week_uses_calendar_boundary_and_rejects_future_events():
     assert brief["summary"]["today_activity_count"] == 1
     assert brief["statistics_period"]["week_start"] == "2026-10-05"
     assert brief["statistics_period"]["timezone"] == "UTC"
+
+
+def test_recorded_stage_preserves_context_and_does_not_overwrite_inference():
+    def context(stage, stamp, valid=True):
+        return {"observed_at":"2026-10-06T06:00:00Z", "payload":{"project_intelligence":{"context":{
+            "valid":valid,"modified_at":stamp,"path":".project-intelligence/project_context.yaml",
+            "data":{"project":{"current_stage":stage}}}}}}
+    brief = build_project_brief([context("旧阶段","2026-09-01T00:00:00Z"),
+                                 context("业务阶段待核实","2026-10-01T00:00:00Z"),
+                                 context("错误配置","2026-10-06T00:00:00Z",False)], {"work_items":[]})
+    assert brief["recorded_stage"]["stage"] == "业务阶段待核实"
+    assert brief["current_stage"] == "尚未形成明确阶段"
+    assert build_project_brief([], {"work_items":[]})["recorded_stage"] is None
+
+
+def test_recorded_stage_reads_central_v1_files_envelope():
+    record = {"payload":{"files":{"project_intelligence":{"context":{
+        "valid":True,"data":{"project":{"current_stage":"业务阶段待核实"}}}}}}}
+    assert build_project_brief([record], {"work_items":[]})["recorded_stage"]["stage"] == "业务阶段待核实"

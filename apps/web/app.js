@@ -481,6 +481,12 @@ async function runGlobalSearch(loadMore = false) {
   }
 }
 
+function briefStage(brief) {
+  const record = brief.recorded_stage;
+  return record?.stage ? {label:'记录中的阶段', value:record.stage, note:`认知记录更新 ${portfolioDate(record.modified_at)}；需结合实际工作核对`}
+    : {label:'资料推断阶段', value:brief.current_stage || '尚未识别', note:'由已采集材料自动推断，不代表最新验收状态'};
+}
+
 function metric(label, value, note = '', small = false) {
   return `
     <div class="metric-card">
@@ -499,7 +505,7 @@ function renderOverview(project, detail) {
   const contributorCount = contributors.contributor_count ?? rollup.contributor_count ?? project.contributor_count ?? 0;
   const localCount = contributors.local_contributor_count ?? rollup.local_contributor_count ?? 0;
   els.overview.innerHTML = [
-    metric('当前阶段', brief.current_stage || '尚未识别', '以最新项目资料和近期开发活动为准', true),
+    metric(briefStage(brief).label, briefStage(brief).value, briefStage(brief).note, true),
     metric('参与人员', contributorCount, localCount ? `${localCount} 人已接入本地工作区` : '根据项目仓库活动识别'),
     metric('进行中任务', summary.in_progress_task_count ?? 0, `${summary.planned_task_count ?? 0} 项明确待办`),
     metric('待处理问题', issueCount, issueCount ? '需要继续跟进' : '当前未识别到明确问题'),
@@ -556,10 +562,10 @@ function memoryTags(items, blocker = false, limit = 6) {
 function renderMemory(detail) {
   const brief = detail.brief || {};
   const source = brief.source_status || {};
-  const reference = source.freshness_reference_date ? `资料更新至 ${source.freshness_reference_date}` : '';
+  const reference = brief.recorded_stage?.stage ? briefStage(brief).note : source.freshness_reference_date ? `资料更新至 ${source.freshness_reference_date}` : '资料日期未知；需核对阶段';
   const history = source.historical_fact_count ? `${source.historical_fact_count} 条历史记录已转入周度追溯` : '';
   els.projectMemory.innerHTML = `
-    <div class="memory-row stage-row"><div class="memory-label">当前阶段</div><div class="memory-value stage-value">${escapeHtml(brief.current_stage || '尚未识别')}</div>${reference ? `<div class="memory-source">${escapeHtml(reference)}</div>` : ''}</div>
+    <div class="memory-row stage-row"><div class="memory-label">${escapeHtml(briefStage(brief).label)}</div><div class="memory-value stage-value">${escapeHtml(briefStage(brief).value)}</div>${reference ? `<div class="memory-source">${escapeHtml(reference)}</div>` : ''}</div>
     <div class="memory-row"><div class="memory-label">已完成</div>${memoryTags(brief.completed)}</div>
     <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(brief.in_progress)}</div>
     <div class="memory-row"><div class="memory-label">当前问题</div>${memoryTags(brief.issues, true)}</div>
@@ -958,7 +964,7 @@ document.getElementById('copy-project-brief').addEventListener('click', async ()
   const project = state.projects.find(item => item.project_id === id);
   try {
     const brief = await api(`/api/v1/projects/${encodeURIComponent(id)}/brief`);
-    const lines = [projectLabel(project || {}), `资料日期：${brief.source_status?.freshness_reference_date || '未知'}`, `当前阶段：${brief.current_stage || '尚未识别'}`];
+    const lines = [projectLabel(project || {}), `资料日期：${brief.source_status?.freshness_reference_date || '未知'}`, `${briefStage(brief).label}：${briefStage(brief).value}`, `阶段依据：${briefStage(brief).note}`];
     for (const [key, label] of [['completed', '已完成'], ['in_progress', '进行中'], ['issues', '问题'], ['next_steps', '下一步'], ['latest_metrics', '指标']]) {
       lines.push(`\n${label}`, ...(brief[key] || []).map(item => `• ${typeof item === 'string' ? item : item.text || item.title || JSON.stringify(item)}`));
       if (!brief[key]?.length) lines.push('尚未识别');
