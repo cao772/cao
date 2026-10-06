@@ -276,3 +276,39 @@ test('global search labels filename-only hits without claiming original content 
   assert.match(html,/目录登记（未读取正文）/);
   assert.match(html,/inventory-source-01\/report.md/);
 });
+
+
+test('project load pool limits concurrency and preserves input order', async () => {
+  const c=app(async () => response({}));let active=0,peak=0;
+  const releases=[];
+  const run=c.mapConcurrent([0,1,2,3,4,5],async n=>{active++;peak=Math.max(peak,active);await new Promise(r=>releases.push(r));active--;return n;},2);
+  for(let i=0;i<6;i++){while(!releases[i]) await new Promise(r=>setImmediate(r));releases[i]();}
+  assert.deepEqual(Array.from(await run),[0,1,2,3,4,5]);assert.equal(peak,2);
+});
+test('retry reads only failed sections and preserves successful project data', async () => {
+  const calls=[];const c=app(async path=>{calls.push(path);return response({recovered:true});});
+  vm.runInContext("renderPortfolio = () => {}; state.portfolioRows=[{project:{project_id:'p'},brief:{keep:true},briefError:false,intelligence:null,intelligenceError:true}]",c);
+  await c.retryPortfolioRow('p');
+  assert.deepEqual(calls,['/api/v1/projects/p/intelligence']);
+  assert.equal(vm.runInContext('state.portfolioRows[0].brief.keep',c),true);
+  assert.equal(vm.runInContext('state.portfolioRows[0].intelligenceError',c),false);
+  assert.equal(vm.runInContext('state.retryingProjects.size',c),0);
+});
+test('duplicate retries coalesce and late results cannot overwrite a new portfolio load', async () => {
+  let finish;let calls=0;const c=app(()=>{calls++;return new Promise(r=>finish=r);});
+  vm.runInContext("renderPortfolio=()=>{}; state.portfolioRows=[{project:{project_id:'p'},briefError:true}]",c);
+  const old=c.retryPortfolioRow('p');await c.retryPortfolioRow('p');assert.equal(calls,1);
+  vm.runInContext("state.portfolioLoadId++;state.retryingProjects.clear();state.portfolioRows=[{project:{project_id:'p'},brief:{fresh:true}}]",c);
+  finish(response({obsolete:true}));await old;
+  assert.equal(vm.runInContext('state.portfolioRows[0].brief.fresh',c),true);
+});
+
+test('failed project cards expose recovery and prevent repeated clicks while retrying', () => {
+  const c=app(async () => response({}));
+  vm.runInContext("renderDailyFocus=()=>{};els.portfolioSearch.value='';els.portfolioGrid.querySelectorAll=()=>[];state.projects=[{project_id:'p'}];state.portfolioRows=[{project:state.projects[0],briefError:true,intelligenceError:false}];",c);
+  c.renderPortfolio();
+  assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/data-portfolio-retry="p"/);
+  assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/重试未读部分/);
+  vm.runInContext("state.retryingProjects.add('p')",c);c.renderPortfolio();
+  assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/data-portfolio-retry="p" disabled/);
+});

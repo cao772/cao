@@ -1,4 +1,4 @@
-const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, projectLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0 };
+const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, projectLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0, retryingProjects: new Set() };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -333,13 +333,16 @@ function renderPortfolio() {
         <span>资料 ${materialCount ?? '—'}</span><span>仓库 ${repositories ?? '—'}</span><span>群聊 ${groups ?? '—'}</span>
       </div>
       <div class="portfolio-date${sourceAge === null || sourceAge > 14 ? ' stale' : ''}">资料日期：${escapeHtml(portfolioDate(sourceDate))}${sourceAge > 14 ? `（距今 ${sourceAge} 天，建议核对）` : ''} · 本地采集：${escapeHtml(portfolioDate(project.last_seen_at))}</div>
-      ${row.briefError || row.intelligenceError ? '<p class="portfolio-error">部分概况读取失败，详情中可能有更多信息。</p>' : ''}
+      ${row.briefError || row.intelligenceError ? `<p class="portfolio-error">部分概况读取失败，已读取内容保留。</p><button class="secondary-button" type="button" data-portfolio-retry="${escapeHtml(project.project_id)}" ${state.retryingProjects.has(project.project_id) ? 'disabled' : ''}>${state.retryingProjects.has(project.project_id) ? '正在重试…' : '重试未读部分'}</button>` : ''}
       <div class="portfolio-actions">
         <button class="portfolio-open" type="button" data-portfolio-open="${escapeHtml(project.project_id)}">查看进展</button>
         <button class="portfolio-knowledge" type="button" data-portfolio-knowledge="${escapeHtml(project.project_id)}">资料与沟通</button>
       </div>
     </article>`;
   }).join('') : `<div class="portfolio-empty">${rows.length ? '没有符合条件的项目。请清除关键词或取消待关注筛选。' : '暂无项目，等待首次采集。'}</div>`;
+  els.portfolioGrid.querySelectorAll('[data-portfolio-retry]').forEach(button => {
+    button.addEventListener('click', () => retryPortfolioRow(button.dataset.portfolioRetry));
+  });
   els.portfolioGrid.querySelectorAll('[data-portfolio-open]').forEach(button => {
     button.addEventListener('click', () => selectProject(button.dataset.portfolioOpen));
   });
@@ -351,11 +354,49 @@ function renderPortfolio() {
   });
 }
 
+async function mapConcurrent(items, worker, limit = 4) {
+  const result = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(items.length, Math.max(1, limit)) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      result[index] = await worker(items[index], index);
+    }
+  }));
+  return result;
+}
+
+async function retryPortfolioRow(projectId) {
+  const row = state.portfolioRows.find(item => item.project.project_id === projectId);
+  if (!row || state.retryingProjects.has(projectId)) return;
+  const sections = ['brief', 'intelligence'].filter(key => row[`${key}Error`]);
+  if (!sections.length) return;
+  const loadId = state.portfolioLoadId;
+  state.retryingProjects.add(projectId);
+  renderPortfolio();
+  try {
+    const results = await Promise.allSettled(sections.map(key => api(`/api/v1/projects/${encodeURIComponent(projectId)}/${key}`)));
+    if (loadId !== state.portfolioLoadId || !state.portfolioRows.includes(row)) return;
+    results.forEach((result, index) => {
+      const key = sections[index];
+      row[`${key}Error`] = result.status === 'rejected';
+      if (result.status === 'fulfilled') row[key] = result.value;
+    });
+  } finally {
+    if (loadId === state.portfolioLoadId) {
+      state.retryingProjects.delete(projectId);
+      renderPortfolio();
+    }
+  }
+}
+
 async function loadPortfolio() {
   const loadId = ++state.portfolioLoadId;
+  state.retryingProjects.clear();
   els.portfolioStatus.textContent = '正在汇总项目背景、资料和进度…';
   if (!state.portfolioRows.length) els.portfolioGrid.innerHTML = '<div class="portfolio-empty">正在读取项目概况…</div>';
-  const rows = await Promise.all(state.projects.map(async project => {
+  const rows = await mapConcurrent(state.projects, async project => {
+    if (loadId !== state.portfolioLoadId) return null;
     const encoded = encodeURIComponent(project.project_id);
     const [brief, intelligence] = await Promise.allSettled([
       api(`/api/v1/projects/${encoded}/brief`),
@@ -368,7 +409,7 @@ async function loadPortfolio() {
       briefError: brief.status === 'rejected',
       intelligenceError: intelligence.status === 'rejected',
     };
-  }));
+  });
   if (loadId !== state.portfolioLoadId) return;
   state.portfolioRows = rows;
   renderPortfolio();
