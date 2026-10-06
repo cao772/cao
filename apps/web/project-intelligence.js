@@ -2,6 +2,8 @@ const intelligenceState = {
   projectId: null,
   data: null,
   search: null,
+  loadId: 0,
+  searchId: 0,
 };
 
 const intelligenceEls = {
@@ -235,18 +237,30 @@ function renderIntelligenceSummary(data) {
 
 function progressItems(items, emptyText) {
   if (!items?.length) return `<div class="intelligence-empty compact-empty">${escapeHtml(emptyText)}</div>`;
-  return `<ul class="progress-list">${items.slice(0, 6).map(item => `<li>${escapeHtml(intelligenceListText(item))}</li>`).join('')}</ul>`;
+  const list = values => `<ul class="progress-list">${values.map(item => `<li>${escapeHtml(intelligenceListText(item).replace(/^\s*[-*•]\s*/, ''))}</li>`).join('')}</ul>`;
+  return list(items.slice(0, 6)) + (items.length > 6
+    ? `<details class="progress-more"><summary>展开其余 ${items.length - 6} 项</summary>${list(items.slice(6))}</details>` : '');
 }
 
 function renderProgress(data) {
   const progress = data.progress || {};
-  const stage = progress.current_stage || '尚未形成明确阶段';
+  const context = data.context?.available === false ? {} : (data.context || {});
+  const recordedStage = context.project?.current_stage;
+  const inferredStage = progress.current_stage;
+  const stage = recordedStage || inferredStage || '尚未形成明确阶段';
+  const contextDate = dossierDate(context.modified_at || context.generated_at);
+  const materialDate = dossierDate(progress.source_status?.freshness_reference_date);
+  const source = recordedStage ? `项目认知记录 · 更新 ${contextDate}` : `材料自动汇总 · 资料日期 ${materialDate}`;
   intelligenceEls.progress.innerHTML = `
-    <div class="progress-stage"><span>当前阶段</span><strong>${escapeHtml(stage)}</strong></div>
-    <div class="progress-section"><strong>已完成</strong>${progressItems(progress.completed, '暂无可确认的已完成事项')}</div>
-    <div class="progress-section"><strong>进行中</strong>${progressItems(progress.in_progress, '当前没有已识别的明确任务')}</div>
-    <div class="progress-section"><strong>待处理问题</strong>${progressItems(progress.issues, '当前没有来自项目资料的待处理问题')}</div>
-    <div class="progress-section"><strong>下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步')}</div>`;
+    <div class="progress-stage"><span>${recordedStage ? '记录中的当前阶段' : '资料推断阶段'}</span><strong>${escapeHtml(stage)}</strong></div>
+    <div class="dossier-field-source">${escapeHtml(source)}；请结合实际工作核对，不代表验收结果。</div>
+    ${recordedStage && inferredStage && recordedStage !== inferredStage ? `<div class="dossier-stage-note">材料自动汇总推断为“${escapeHtml(inferredStage)}”（资料日期 ${escapeHtml(materialDate)}），与认知记录不同，尚待核对。</div>` : ''}
+    ${context.current_work?.length ? `<div class="progress-section"><strong>认知记录中的当前工作</strong><div class="dossier-field-source">更新 ${escapeHtml(contextDate)}；不代表正在执行的任务状态。</div>${progressItems(context.current_work, '')}</div>` : ''}
+    <div class="progress-section"><strong>资料摘录：已完成</strong>${progressItems(progress.completed, '尚未从已采集资料中提取到已完成事项，不代表项目没有成果。')}</div>
+    <div class="progress-section"><strong>资料摘录：进行中</strong>${progressItems(progress.in_progress, '尚未识别到明确的进行中任务，不代表无人开展工作。')}</div>
+    ${context.known_issues?.length ? `<div class="progress-section"><strong>认知记录中的已知问题</strong><div class="dossier-field-source">更新 ${escapeHtml(contextDate)}</div>${progressItems(context.known_issues, '')}</div>` : ''}
+    <div class="progress-section"><strong>资料摘录：待处理问题</strong>${progressItems(progress.issues, '已采集资料尚未提取到问题，不能据此判断项目没有问题。')}</div>
+    <div class="progress-section"><strong>资料摘录：下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步')}</div>`;
 }
 
 function repositoryLabel(repository) {
@@ -412,6 +426,8 @@ async function runIntelligenceSearch() {
     intelligenceEls.searchStatus.textContent = '请输入要查找的文件名、编号、金额、功能或正文关键词。';
     return;
   }
+  const requestId = ++intelligenceState.searchId;
+  const isCurrent = () => intelligenceState.searchId === requestId && intelligenceState.projectId === projectId && state.selectedProjectId === projectId;
   intelligenceEls.searchButton.disabled = true;
   intelligenceEls.searchButton.textContent = '搜索中...';
   try {
@@ -419,26 +435,53 @@ async function runIntelligenceSearch() {
     if (intelligenceEls.searchType.value) params.set('material_type', intelligenceEls.searchType.value);
     if (intelligenceEls.currentOnly.checked) params.set('current_only', 'true');
     const payload = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/search?${params.toString()}`);
-    renderSearchResults(payload);
+    if (isCurrent()) renderSearchResults(payload);
   } catch (error) {
+    if (!isCurrent()) return;
     intelligenceEls.searchStatus.textContent = `搜索失败：${error.message}`;
     intelligenceEls.searchResults.innerHTML = '';
   } finally {
+    if (!isCurrent()) return;
     intelligenceEls.searchButton.disabled = false;
     intelligenceEls.searchButton.textContent = '搜索';
   }
 }
 
 async function loadProjectIntelligence(projectId) {
+  const requestId = ++intelligenceState.loadId;
+  if (intelligenceState.projectId !== projectId) intelligenceEls.searchInput.value = '';
+  ++intelligenceState.searchId;
   intelligenceState.projectId = projectId;
+  intelligenceState.data = null;
+  intelligenceState.search = null;
+  intelligenceEls.searchButton.disabled = true;
+  intelligenceEls.searchButton.textContent = '搜索';
+  intelligenceEls.searchResults.innerHTML = '';
+  intelligenceEls.searchStatus.textContent = '正在读取项目材料索引…';
+  for (const key of ['summary', 'context', 'progress', 'repositories', 'categories', 'series', 'changes', 'health']) {
+    intelligenceEls[key].innerHTML = '<div class="intelligence-empty">正在读取…</div>';
+  }
   const project = state.projects.find(item => item.project_id === projectId) || {};
   intelligenceEls.title.textContent = `${projectLabel(project)} · 项目认知`;
   intelligenceEls.subtitle.textContent = '理解项目材料、版本关系、最近变化，并直接搜索文件内容中的关键信息';
   intelligenceEls.status.textContent = '加载中';
   intelligenceEls.status.className = 'badge neutral';
   intelligenceEls.dossier.innerHTML = '<div class="intelligence-empty">正在读取项目依据…</div>';
-  const data = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/intelligence`);
-  if (intelligenceState.projectId !== projectId) return;
+  let data;
+  const isCurrent = () => intelligenceState.loadId === requestId && intelligenceState.projectId === projectId && state.selectedProjectId === projectId;
+  try {
+    data = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/intelligence`);
+  } catch (error) {
+    if (!isCurrent()) return;
+    for (const key of ['summary', 'dossier', 'context', 'progress', 'repositories', 'categories', 'series', 'changes', 'health']) {
+      intelligenceEls[key].innerHTML = '<div class="intelligence-empty">读取失败，请返回项目后重试。</div>';
+    }
+    intelligenceEls.searchStatus.textContent = '项目概况暂不可用，仍可尝试关键词搜索。';
+    intelligenceEls.searchButton.disabled = false;
+    throw error;
+  }
+  if (!isCurrent()) return;
+  intelligenceEls.searchButton.disabled = false;
   intelligenceState.data = data;
   renderDossier(data);
   renderIntelligenceSummary(data);
@@ -449,7 +492,7 @@ async function loadProjectIntelligence(projectId) {
   renderRecentChanges(data);
   renderHealth(data);
   const contextAvailable = data.context?.available;
-  intelligenceEls.status.textContent = contextAvailable ? '项目认知已接入' : '自动理解中';
+  intelligenceEls.status.textContent = contextAvailable ? '项目认知已接入' : '项目背景资料待补充';
   intelligenceEls.status.className = `badge ${contextAvailable ? 'good' : 'warn'}`;
   intelligenceEls.searchStatus.textContent = (data.summary?.search_indexed_file_count || 0)
     ? `已索引 ${data.summary.search_indexed_file_count} 份材料正文。输入关键词可定位到页、Sheet/行、段落或文本行。`

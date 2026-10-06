@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/settings.css" />
   <link rel="stylesheet" href="/project-intelligence.css?v=p1-evidence-2" />
-  <link rel="stylesheet" href="/portfolio.css?v=p2-global-search-1" />
+  <link rel="stylesheet" href="/portfolio.css?v=p6-search-speed-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -28,6 +28,7 @@
       <nav id="project-list" class="project-list"><div class="empty">正在加载项目…</div></nav>
 
       <div class="sidebar-section-title platform-title">平台</div>
+      <button id="news-nav" class="project-item" type="button"><span class="name">AI 行业资讯</span><span class="meta">热点 · 精选 · 日报</span></button>
       <button id="settings-nav" class="project-item settings-nav" type="button">
         <span class="name">平台配置</span>
         <span class="meta"><span>接入与采集</span><span>⚙</span></span>
@@ -49,16 +50,24 @@
         <button id="portfolio-refresh-btn" class="secondary-button" type="button">刷新数据</button>
       </header>
       <section id="portfolio-overview" class="portfolio-overview" aria-label="项目组合概况"></section>
+      <section class="daily-focus" aria-label="今日关注">
+        <div class="portfolio-search-heading"><h3>今天先关注什么 <small id="daily-focus-date"></small></h3><p>依据已采集资料整理，按来源异常、问题、下一步和资料时效排列；不代表今天新发生，也不自动代你执行。</p></div>
+        <div class="portfolio-filters"><label><input id="focus-show-handled" type="checkbox" /> 显示已处理和稍后事项</label><label><input id="focus-show-all" type="checkbox" /> 展开全部事项</label><span id="focus-count" role="status"></span></div>
+        <p class="focus-local-note">跟进状态仅保存在当前浏览器，清除网站数据会重置。仅保存事项指纹与状态，不保存资料正文；明天再看在当地次日零点恢复，不会发送通知。</p>
+        <div id="daily-focus-items" class="daily-focus-grid"><p class="muted">正在整理待关注事项…</p></div>
+      </section>
       <section class="portfolio-global-search" aria-label="跨项目检索">
-        <div class="portfolio-search-heading"><h3>跨项目查资料与沟通</h3><p>结果保留项目、原始来源及时间；仅搜索已采集和授权的内容。</p></div>
+        <div class="portfolio-search-heading"><h3>跨项目查资料与沟通</h3><p>无需配置模型，即可检索已采集材料与授权沟通；保留来源及时间。⌘ / Ctrl + K 快速搜索。</p></div>
         <div class="portfolio-search-controls">
           <label><span>关键词</span><input id="global-search-input" type="search" placeholder="例如：费用、验收、框架、关键决定" autocomplete="off" /></label>
           <label><span>项目</span><select id="global-search-project"><option value="">全部项目</option></select></label>
           <label><span>来源</span><select id="global-search-source"><option value="all">全部来源</option><option value="material">项目材料</option><option value="conversation">授权沟通</option></select></label>
+          <label><span>结果排序</span><select id="global-search-order"><option value="relevance">相关性优先</option><option value="recent">最近优先</option></select></label>
           <button id="global-search-btn" class="primary-button" type="button">搜索</button>
         </div>
         <div id="global-search-status" class="portfolio-search-status" role="status" aria-live="polite">输入关键词开始检索。</div>
         <div id="global-search-results" class="portfolio-search-results"></div>
+        <button id="global-search-more" class="secondary-button" type="button" hidden>加载更多结果</button>
       </section>
       <div class="portfolio-toolbar">
         <div>
@@ -70,7 +79,24 @@
           <input id="portfolio-search" type="search" placeholder="搜索项目、背景或下一步" autocomplete="off" />
         </label>
       </div>
+      <div class="portfolio-filters">
+        <label><input id="portfolio-attention" type="checkbox" /> 只看待关注（问题或读取异常）</label>
+        <label>排序 <select id="portfolio-sort"><option value="issues">问题优先</option><option value="recent">最近采集</option><option value="name">项目名称</option></select></label>
+        <span id="portfolio-match-count" role="status"></span>
+      </div>
       <section id="portfolio-grid" class="portfolio-grid" aria-label="项目列表"><div class="empty">正在读取项目…</div></section>
+    </main>
+
+    <main id="news-view" class="main portfolio-main hidden">
+      <header class="topbar portfolio-topbar"><div><div class="eyebrow">INDUSTRY INTELLIGENCE</div><h2>AI 行业资讯</h2><p>追踪外部动态，帮助发现值得进一步研究的技术与产品。</p></div><div class="topbar-actions"><button id="news-copy" class="secondary-button" type="button" disabled>复制当前简报</button><button id="news-refresh" class="secondary-button" type="button">刷新资讯</button></div></header>
+      <section class="portfolio-global-search">
+        <div class="news-controls"><label>栏目<select id="news-mode"><option value="hot">多来源热点</option><option value="selected">最近 7 天精选</option><option value="daily">最新日报</option></select></label><label>分类<select id="news-category"><option value="">全部分类</option></select></label><label>筛选已载入内容<input id="news-query" type="search" placeholder="例如：智能体、多模态、论文" autocomplete="off" /></label></div>
+        <p class="news-note">内容来自 <a href="https://aihot.news" target="_blank" rel="noopener noreferrer">AIHOT</a>，由其整理；外部资讯不代表项目进展。原文发布日期缺失时会明确标记。平台不调用模型，也不会向来源发送项目资料或筛选关键词。</p>
+        <div id="news-status" class="portfolio-search-status" role="status" aria-live="polite">选择栏目查看已发布资讯。</div>
+        <div id="news-results" class="portfolio-search-results"></div>
+        <button id="news-more" class="secondary-button" type="button" hidden>查看更多资讯</button>
+        <p class="news-note">再次查看时检查更新，5 分钟内复用已获取内容；断网时保留最近成功读取的内容并提示。每日推送继续由 Hermes 管理。</p>
+      </section>
     </main>
 
     <main id="dashboard-view" class="main hidden">
@@ -81,12 +107,13 @@
           <p id="project-subtitle"></p>
         </div>
         <div class="topbar-actions">
+          <button id="copy-project-brief" class="secondary-button" type="button">复制项目简报</button>
           <button id="project-intelligence-btn" class="secondary-button" type="button">项目认知</button>
           <button id="refresh-btn" class="secondary-button" type="button">刷新数据</button>
         </div>
       </header>
 
-      <section id="overview" class="overview-grid"></section>
+      <section id="overview" class="overview-grid"><div class="empty">正在加载项目概况…</div></section>
 
       <section class="content-grid">
         <div class="panel panel-wide task-panel">
@@ -97,7 +124,7 @@
             </div>
             <span id="task-scope" class="badge neutral">等待数据</span>
           </div>
-          <div id="task-table" class="table-wrap"></div>
+          <div id="task-table" class="table-wrap"><div class="empty">正在加载当前任务…</div></div>
         </div>
 
         <div class="panel">
@@ -107,7 +134,7 @@
               <p>以最新资料为主，历史记录保留在周度进展中</p>
             </div>
           </div>
-          <div id="project-memory" class="memory-block"></div>
+          <div id="project-memory" class="memory-block"><div class="empty">正在加载项目进展…</div></div>
         </div>
 
         <div class="panel">
@@ -117,7 +144,7 @@
               <p>汇总本机接入人员和项目仓库参与人员</p>
             </div>
           </div>
-          <div id="contributors" class="contributors"></div>
+          <div id="contributors" class="contributors"><div class="empty">正在加载人员协作…</div></div>
         </div>
 
         <div class="panel panel-wide">
@@ -128,7 +155,7 @@
             </div>
             <span id="timeline-count" class="badge neutral">0 周</span>
           </div>
-          <div id="timeline" class="timeline"></div>
+          <div id="timeline" class="timeline"><div class="empty">正在加载每周进展…</div></div>
         </div>
       </section>
     </main>
@@ -158,8 +185,8 @@
         <div class="panel intelligence-search-card">
           <div class="intelligence-search-row">
             <label class="intelligence-search-box">
-              <span>搜索项目材料</span>
-              <input id="intelligence-search-input" type="search" placeholder="输入文件名、编号、金额、功能名称、合同条款或正文关键词" autocomplete="off" />
+              <span>搜索项目材料与沟通</span>
+              <input id="intelligence-search-input" type="search" placeholder="输入文件名、编号、金额、功能名称、合同条款、微信群内容或业务决定" autocomplete="off" />
             </label>
             <label class="intelligence-filter">
               <span>材料类型</span>
@@ -435,13 +462,16 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=p2-global-search-1"></script>
+  <script src="/app.js?v=p6-search-speed-1"></script>
   <script src="/settings.js?v=p1-dossier-1"></script>
   <script src="/settings-projects.js"></script>
   <script src="/settings-local-scope.js"></script>
   <script src="/settings-policy.js"></script>
-  <script src="/settings-model.js"></script>
+  <script src="/settings-model.js?v=m7-tracememo-1"></script>
   <script src="/settings-nodes.js"></script>
+  <script src="/settings-wechat.js?v=m7-gateway-status-1"></script>
   <script src="/project-intelligence.js?v=p1-evidence-2"></script>
+  <script src="/project-communications.js"></script>
+  <script src="/industry-news.js?v=1"></script>
 </body>
 </html>

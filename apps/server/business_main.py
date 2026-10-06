@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import main as main_module
 from main import app
+from industry_news import router as industry_news_router
 from agent_api import router as agent_router
+from conversation_intelligence_api import router as conversation_intelligence_router
 from model_config import router as model_config_router
 from node_status import router as node_status_router
 from people_identity import router as people_identity_router
@@ -52,4 +54,7 @@ app.include_router(node_status_router)
 app.include_router(people_identity_router)
 app.include_router(agent_router)
 app.include_router(project_intelligence_router)
+app.include_router(conversation_intelligence_router)
 app.include_router(portfolio_search_router)
+
+app.include_router(industry_news_router)

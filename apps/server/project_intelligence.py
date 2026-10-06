@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from evidence_retrieval import evidence_excerpt
+
 import json
 import re
 from collections import Counter, defaultdict
@@ -812,7 +814,7 @@ def search_project_intelligence(
                 continue
             score += matched
             matched_fields.append("正文")
-            snippet = str(segment.get("text") or "")[:900]
+            snippet = evidence_excerpt(str(segment.get("text") or ""), query, 900)
             locator = segment.get("locator")
             location_type = segment.get("location_type")
             break

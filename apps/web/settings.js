@@ -106,6 +106,8 @@ function setBusy(button, busy, busyText = '处理中...') {
 }
 
 function showSettings(projectId = null) {
+  document.getElementById('news-view')?.classList.add('hidden');
+  document.getElementById('news-nav')?.classList.remove('active');
   settingsEls.dashboard.classList.add('hidden');
   document.getElementById('portfolio-view')?.classList.add('hidden');
   document.getElementById('intelligence-view')?.classList.add('hidden');
