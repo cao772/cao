@@ -218,3 +218,67 @@ class ProjectIntelligenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_filename_catalog_search_returns_each_original_name_without_claiming_body_read():
+    index = {"path":"inventory/catalog-001.md","name":"catalog-001.md", "version_status":"current", "_search_segments":[
+        {"text":"- 模型评测一.md | 来源 inventory-source-01/模型评测一.md | 修改日期 2026-09-01","locator":"第5行"},
+        {"text":"- 模型评测二.md | 来源 inventory-source-01/模型评测二.md | 修改日期 2026-09-02","locator":"第6行"},
+        {"text":"- 越界评测.md | 来源 ../outside.md | 修改日期 2026-09-02","locator":"第7行"},
+    ]}
+    found = search_project_intelligence({"materials":[index]},"评测")
+    assert found["count"] == 2
+    assert {x["material"]["name"] for x in found["results"]} == {"模型评测一.md","模型评测二.md"}
+    assert all(x["material"]["metadata_only"] for x in found["results"])
+    assert all(x["material"]["version_status"] == "unknown" for x in found["results"])
+    assert all(x["location_type"] == "catalog_metadata" for x in found["results"])
+    assert all("正文" not in x["matched_fields"] for x in found["results"])
+    assert search_project_intelligence({"materials":[index]},"评测",current_only=True)["count"] == 0
+
+
+def test_original_indexed_material_wins_over_catalog_metadata_duplicate():
+    page = {"path":"inventory/catalog-001.md","_search_segments":[
+        {"text":"- 评测.md | 来源 documents/评测.md | 修改日期 2026-09-01","locator":"第5行"}]}
+    original = {"name":"评测.md","path":"documents/评测.md","_search_segments":[{"text":"评测结果已经通过","locator":"第2行"}]}
+    found=search_project_intelligence({"materials":[page,original]},"评测")
+    assert found["count"] == 1
+    assert found["results"][0]["snippet"] == "评测结果已经通过"
+    assert not found["results"][0]["material"].get("metadata_only")
+
+
+def test_unread_declared_material_is_also_marked_as_metadata_only():
+    intelligence=build_project_intelligence([snapshot(snapshot_id=1,observed_at='2026-10-06T00:00:00Z',files=[{'path':'docs/README.md','modified_at':'2026-10-01T00:00:00Z'}])],[],include_search_index=True)
+    found=search_project_intelligence(intelligence,'README.md')
+    assert found['results'][0]['material']['metadata_only'] is True
+    assert intelligence['summary']['search_indexed_file_count'] == 0
+
+
+def test_inventory_pages_remain_searchable_but_do_not_create_material_versions_or_changes():
+    original = {"path": "docs/周报.docx", "sha256": "business", "modified_at": "2026-09-01T00:00:00+00:00"}
+    index = {"path": "inventory/catalog-001.md", "sha256": "business", "modified_at": "2026-10-01T00:00:00+00:00"}
+    old = snapshot(snapshot_id=1, files=[original, {**index, "sha256": "old-index"}])
+    current = snapshot(snapshot_id=2, files=[original, index], search_items=[{
+        "path": index["path"], "segments": [{"text": "- 年度报告.docx | 来源 docs/年度报告.docx | 修改日期 2026-09-01", "locator": "第5行"}],
+    }])
+    data = build_project_intelligence([current], [current, old], include_search_index=True)
+    assert data["summary"]["material_count"] == 1
+    assert data["summary"]["registered_file_count"] == 2
+    assert data["summary"]["inventory_file_count"] == 1
+    assert data["summary"]["series_count"] == 1
+    assert sum(data["summary"]["category_counts"].values()) == 1
+    assert not any(issue["type"] == "duplicate_content" for issue in data["health"]["issues"])
+    assert [item["path"] for item in data["recent_changes"]] == [original["path"]]
+    assert data["recent_changes_basis"] == "modified_time"
+    hit = search_project_intelligence(data, "年度报告")
+    assert hit["count"] == 1
+    assert hit["results"][0]["material"]["path"] == "docs/年度报告.docx"
+    assert hit["results"][0]["material"]["metadata_only"] is True
+
+
+def test_real_material_change_survives_inventory_regeneration():
+    path = "docs/requirements.md"
+    before = snapshot(snapshot_id=1, files=[{"path": path, "sha256": "v1"}])
+    after = snapshot(snapshot_id=2, files=[{"path": path, "sha256": "v2"}, {"path": "inventory/catalog-001.md", "sha256": "new"}])
+    result = build_project_intelligence([after], [after, before])
+    assert result["recent_changes_basis"] == "snapshot_diff"
+    assert [(item["path"], item["change_type"]) for item in result["recent_changes"]] == [(path, "modified")]

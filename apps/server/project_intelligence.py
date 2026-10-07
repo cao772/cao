@@ -343,6 +343,8 @@ def _build_recent_changes(history_snapshots: list[dict[str, Any]], material_type
         previous_files = _snapshot_file_map(previous)
         observed_at = latest.get("observed_at")
         for path in sorted(set(latest_files) | set(previous_files)):
+            if _is_inventory_index(path):
+                continue
             before = previous_files.get(path)
             after = latest_files.get(path)
             if before is None and after is not None:
@@ -469,6 +471,8 @@ def build_project_intelligence(
                 "context_current": bool(context_series and context_series.get("current_file") == path),
                 "m1_series": m1_map.get(path),
                 "search_index_enabled": bool(search_item),
+                "metadata_only": _is_inventory_index(path) or (not analysis_item and not search_item),
+                "generated_inventory": _is_inventory_index(path),
             }
             if include_search_index:
                 variant["_search_segments"] = list(search_item.get("segments") or [])[:120]
@@ -488,7 +492,7 @@ def build_project_intelligence(
         hashes = {str(item.get("sha256")) for item in path_variants if item.get("sha256")}
         selected["workspace_variant_count"] = len(path_variants)
         selected["workspace_hash_count"] = len(hashes)
-        if len(hashes) > 1:
+        if len(hashes) > 1 and not _is_inventory_index(path):
             selected["workspace_divergent"] = True
             workspace_conflicts.append(
                 {
@@ -502,9 +506,10 @@ def build_project_intelligence(
             selected["workspace_divergent"] = False
         materials.append(selected)
 
+    project_materials = [item for item in materials if not item.get("generated_inventory")]
     material_by_path = {item["path"]: item for item in materials}
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for material in materials:
+    for material in project_materials:
         context_series_id = material.get("context_series_id")
         m1_series = material.get("m1_series") or all_m1.get(material["path"]) or {}
         if context_series_id:
@@ -592,8 +597,8 @@ def build_project_intelligence(
         )
 
     # Contract relationships are additive rather than version replacement.
-    contracts = [item for item in materials if item.get("material_type") == "contract"]
-    for item in materials:
+    contracts = [item for item in project_materials if item.get("material_type") == "contract"]
+    for item in project_materials:
         if item.get("material_type") == "contract_supplement" and contracts:
             same_parent = [candidate for candidate in contracts if candidate.get("parent") == item.get("parent")]
             target = (same_parent or contracts)[0]
@@ -605,7 +610,7 @@ def build_project_intelligence(
 
     # Exact hash duplicates are retained but marked, never deleted automatically.
     by_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for material in materials:
+    for material in project_materials:
         if material.get("sha256"):
             by_hash[str(material["sha256"])].append(material)
     duplicate_issues: list[dict[str, Any]] = []
@@ -624,7 +629,7 @@ def build_project_intelligence(
         for path in unique_paths[1:]:
             relations.append({"from": path, "to": canonical, "relation": "duplicate_of"})
 
-    category_counts = Counter(str(item.get("material_type") or "document") for item in materials)
+    category_counts = Counter(str(item.get("material_type") or "document") for item in project_materials)
     materials.sort(
         key=lambda item: (
             0 if item.get("version_status") in CURRENT_STATUSES else 1,
@@ -655,7 +660,8 @@ def build_project_intelligence(
             }
         )
 
-    search_enabled_count = sum(1 for item in materials if item.get("search_index_enabled"))
+    search_enabled_count = sum(1 for item in materials if item.get("search_index_enabled") and not _is_inventory_index(item.get("path")))
+    inventory_index_count = sum(1 for item in materials if item.get("search_index_enabled") and _is_inventory_index(item.get("path")))
     health_issues = context_issues + workspace_conflicts + duplicate_issues
     health_status = "attention" if any(item.get("type") in {"context_file_missing", "workspace_divergence"} for item in health_issues) else "ok"
     if not context_source:
@@ -679,6 +685,7 @@ def build_project_intelligence(
 
     material_types = {item["path"]: str(item.get("material_type") or "document") for item in materials}
     recent_changes = _build_recent_changes(history_snapshots or [], material_types)
+    recent_changes_basis = "snapshot_diff" if recent_changes else "modified_time"
     if not recent_changes:
         recent_changes = [
             {
@@ -691,7 +698,7 @@ def build_project_intelligence(
                 "observed_at": item.get("observed_at"),
                 "workspace_name": item.get("workspace_name"),
             }
-            for item in sorted(materials, key=lambda entry: _dt_key(entry.get("modified_at")), reverse=True)[:20]
+            for item in sorted(project_materials, key=lambda entry: _dt_key(entry.get("modified_at")), reverse=True)[:20]
             if item.get("modified_at")
         ]
 
@@ -721,10 +728,13 @@ def build_project_intelligence(
             "important_files": important_files[:100],
         },
         "summary": {
-            "material_count": len(materials),
+            "material_count": len(project_materials),
+            "registered_file_count": len(materials),
+            "inventory_file_count": len(materials) - len(project_materials),
             "series_count": len(series_result),
             "multi_version_series_count": sum(1 for item in series_result if int(item.get("count") or 0) > 1),
             "search_indexed_file_count": search_enabled_count,
+            "inventory_index_file_count": inventory_index_count,
             "recent_change_count": len(recent_changes),
             "health_issue_count": len(health_issues),
             "category_counts": dict(category_counts),
@@ -741,6 +751,7 @@ def build_project_intelligence(
         "series": series_result[:500],
         "relations": relations[:2000],
         "recent_changes": recent_changes[:80],
+        "recent_changes_basis": recent_changes_basis,
         "health": {
             "status": health_status,
             "issues": health_issues[:200],
@@ -765,6 +776,32 @@ def _match_score(query: str, text: str, weight: int) -> int:
     return 0
 
 
+def _is_inventory_index(path: Any) -> bool:
+    return bool(re.fullmatch(r"inventory/(?:LOCAL_PROJECT_INVENTORY|catalog-\d{3})\.md", str(path or "")))
+
+
+def _catalog_materials(material: dict[str, Any]) -> list[dict[str, Any]]:
+    if not re.fullmatch(r"inventory/catalog-\d{3}\.md", str(material.get("path") or "")):
+        return []
+    rows = []
+    for segment in material.get("_search_segments") or []:
+        match = re.fullmatch(r"- (.+) \| 来源 (.+) \| 修改日期 (\d{4}-\d{2}-\d{2})", str(segment.get("text") or ""))
+        if not match:
+            continue
+        name, path, modified = match.groups()
+        pure = PurePosixPath(path)
+        if pure.is_absolute() or ".." in pure.parts or "\\" in path or ":" in path or pure.name != name:
+            continue
+        kind = _material_type(path)
+        rows.append({"name": name, "path": path, "modified_at": modified,
+                     "observed_at": material.get("observed_at"),
+                     "material_type": kind, "material_type_label": MATERIAL_LABELS.get(kind, "其他资料"),
+                     "metadata_only": True, "version_status": "unknown", "facts": [],
+                     "summary": "仅登记文件名、来源路径和修改日期；未读取原文件正文。",
+                     "catalog_path": material["path"], "catalog_locator": segment.get("locator")})
+    return rows
+
+
 def search_project_intelligence(
     intelligence: dict[str, Any],
     query: str,
@@ -779,6 +816,19 @@ def search_project_intelligence(
 
     results: list[dict[str, Any]] = []
     for material in intelligence.get("materials") or []:
+        if current_only and _is_inventory_index(material.get("path")):
+            continue
+        catalog = _catalog_materials(material)
+        if catalog:
+            # Metadata rows are distinct files, never evidence of current content.
+            if not current_only:
+                hits = search_project_intelligence({"materials": catalog}, query, material_type=material_type, limit=100)
+                for hit in hits["results"]:
+                    hit["matched_fields"].append("目录登记（未读取正文）")
+                    hit["locator"] = f"{material['path']} · {hit['material']['catalog_locator'] or '目录行'}"
+                    hit["location_type"] = "catalog_metadata"
+                    results.append(hit)
+            continue
         if material_type and material.get("material_type") != material_type:
             continue
         if current_only and material.get("version_status") not in CURRENT_STATUSES:
@@ -813,7 +863,7 @@ def search_project_intelligence(
             if not matched:
                 continue
             score += matched
-            matched_fields.append("正文")
+            matched_fields.append("目录元数据" if material.get("metadata_only") else "正文")
             snippet = evidence_excerpt(str(segment.get("text") or ""), query, 900)
             locator = segment.get("locator")
             location_type = segment.get("location_type")
@@ -839,6 +889,16 @@ def search_project_intelligence(
             }
         )
 
+    # Prefer a separately indexed original material over its catalog row.
+    by_path: dict[str, dict[str, Any]] = {}
+    for hit in results:
+        path = str(hit["material"].get("path") or "")
+        previous = by_path.get(path)
+        if previous is None or (previous["material"].get("metadata_only") and not hit["material"].get("metadata_only")) or (
+            bool(previous["material"].get("metadata_only")) == bool(hit["material"].get("metadata_only")) and hit["score"] > previous["score"]
+        ):
+            by_path[path] = hit
+    results = list(by_path.values())
     results.sort(
         key=lambda item: (
             int(item.get("score") or 0),

@@ -137,7 +137,8 @@ class CommandGatewayTests(unittest.TestCase):
         text = "甲" * 40 + "\n" + "乙" * 40 + "\n" + "丙" * 40
         answer = gateway._mobile_reply(text, limit=90)
         self.assertEqual(answer.splitlines()[0], "甲" * 40)
-        self.assertEqual(answer.splitlines()[1], "乙" * 40)
+        self.assertLessEqual(len(answer), 90)
+        self.assertNotIn("乙", answer)  # A second complete line would exceed the total budget with the notice.
         self.assertIn("已截取", answer)
         self.assertNotIn("丙", answer)
 
@@ -302,3 +303,53 @@ class CommandGatewayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_reply_uses_recorded_stage_and_keeps_inference_explicit():
+    brief={'recorded_stage':{'stage':'业务阶段待核实','modified_at':'2026-10-06'},'current_stage':'测试与验证'}
+    lines='\n'.join(gateway._stage_lines(brief))
+    assert '记录阶段：业务阶段待核实' in lines
+    assert '材料推断另为：测试与验证（尚待核对）' in lines
+    assert '不代表最新验收' in gateway._stage_lines({})[0]
+
+
+def test_mobile_repository_reply_excludes_local_material_sources():
+    data={'profile':{'repositories':[{'id':'materials','role':'materials','url':'file:///local/docs'},
+                                    {'id':'app','role':'application','url':'https://github.com/example/app'}]},'context':{},'summary':{}}
+    reply=gateway._intelligence_reply('Project','仓库',data)
+    assert 'app' in reply and 'materials' not in reply and 'file:' not in reply
+    only={'profile':{'repositories':data['profile']['repositories'][:1]},'context':{},'summary':{}}
+    assert '尚未采集到代码仓库' in gateway._intelligence_reply('Library','仓库',only)
+
+
+def test_mobile_search_marks_metadata_only_hits():
+    reply=gateway._search_reply('Project',{'count':1,'material_count':1,'results':[{'material':{'name':'readme.md','metadata_only':True,'path':'source/readme.md'}}]})
+    assert '目录元数据，未读取正文' in reply
+    assert 'source/readme.md' in reply
+
+
+def test_long_mobile_brief_keeps_source_date_before_truncated_fact_lists():
+    brief={'current_stage':'测试与验证','source_status':{'freshness_reference_date':'2020-01-01'},
+           'completed':['长资料'*200]*3,'in_progress':['长资料'*200]*3,'issues':['长资料'*200]*3,
+           'next_steps':['长资料'*200]*3,'latest_metrics':['长资料'*200]*3}
+    with patch.object(gateway,'_projects',return_value=[{'project_id':'p','project_name':'Project'}]),patch.object(gateway,'_json_request',return_value=brief):
+        reply=gateway.project_command('/项目 p 概览')
+    assert '资料基准：2020-01-01' in reply[:200]
+    assert '需核对现状' in reply[:200]
+    assert len(reply)<=1700
+
+
+def test_mobile_reply_limit_includes_truncation_notice_for_unbroken_text():
+    reply=gateway._mobile_reply('长'*3000,1700)
+    assert len(reply)==1700 and '已截取' in reply
+    assert len(gateway._mobile_reply('长'*30,5))==5
+
+
+def test_mobile_material_list_does_not_promote_generated_catalog_pages():
+    data={'profile':{},'context':{},'summary':{'material_count':3},'materials':[
+        {'name':'catalog-001.md','path':'inventory/catalog-001.md','version_status':'single','modified_at':'2026-10-06'},
+        {'name':'LOCAL_PROJECT_INVENTORY.md','path':'inventory/LOCAL_PROJECT_INVENTORY.md','version_status':'single'},
+        {'name':'原需求.md','path':'docs/原需求.md','version_status':'single','modified_at':'2026-09-01','metadata_only':True}]}
+    reply=gateway._intelligence_reply('Project','材料',data)
+    assert '原需求.md' in reply and 'catalog-001.md' not in reply and 'LOCAL_PROJECT_INVENTORY.md' not in reply
+    assert '1 份原材料元数据，另有 2 页目录索引' in reply

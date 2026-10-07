@@ -47,15 +47,29 @@ test('historical weeks never masquerade as this week or last week', () => {
   assert.equal(c.weekLabel('2020-01-06', 0), '1月6日 – 1月12日');
   assert.match(c.weekLabel(c.dateKey(c.weekStart(new Date())), 9), /^本周/);
 });
-test('daily focus surfaces failures first and preserves stale evidence labels', () => {
+test('daily focus coalesces old facts without representing them as current problems', () => {
   const c = app(async () => response({}));
   const items = c.dailyFocusItems([
-    { project: { project_id: 'p1' }, brief: { issues: ['Needs review'], source_status: { freshness_reference_date: '2020-01-01' } } },
+    { project: { project_id: 'p1' }, brief: { issues: ['Needs review', 'Old issue'], next_steps: ['Old next step'], source_status: { freshness_reference_date: '2020-01-01' } } },
     { project: { project_id: 'p2' }, briefError: true },
   ]);
   assert.equal(items[0].kind, '来源异常');
-  assert.equal(items[1].text, 'Needs review');
-  assert.equal(items.filter(item => item.kind === '资料待更新').length, 2);
+  assert.equal(items.filter(item => item.kind === '历史事项待核对').length, 1);
+  assert.match(items.find(item => item.kind === '历史事项待核对').text, /3 条/);
+  assert.equal(items.filter(item => item.kind === '待核对问题').length, 0);
+  assert.equal(items.filter(item => item.kind === '资料待更新').length, 1);
+});
+test('each fact keeps its own date even when another source is recent', () => {
+  const c = app(async () => response({}));
+  const today = new Date().toISOString().slice(0, 10);
+  const items = c.dailyFocusItems([{ project: { project_id: 'p' }, brief: {
+    issues: ['old issue', 'new issue', 'undated issue'],
+    issue_evidence: [{text:'old issue',source_date:'2020-01-01'}, {text:'new issue',source_date:today}, {text:'undated issue',source_date:null}],
+    source_status: {freshness_reference_date:today},
+  }}]);
+  assert.equal(items.filter(item => item.kind === '待核对问题').length, 2);
+  assert.equal(items.find(item => item.text === 'undated issue').sourceDate, null);
+  assert.equal(items.find(item => item.kind === '历史事项待核对').sourceDate, '2020-01-01');
 });
 
 test('handling survives reload, stores no project text, and can be restored', async () => {
@@ -210,4 +224,137 @@ test('opening industry news during initial project load keeps that view open', a
   newsActive=true;
   finishHealth(response({status:'ok'}));
   assert.equal(await loading,true);
+});
+test('local material sources do not inflate linked code repository counts', () => {
+  const c = app(async () => response({}));
+  const rows = c.registeredCodeRepositories([
+    { role: 'materials', url: 'file:///local/materials' },
+    { role: 'application', url: 'file:///local/docs' },
+    { role: 'application', url: 'https://github.com/example/project.git' },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].url, 'https://github.com/example/project.git');
+});
+
+
+test('new historical evidence reopens a handled review even with the same source date', async () => {
+  const c = app(async () => response({}));
+  const row = issues => ({project:{project_id:'p'},brief:{issues,source_status:{freshness_reference_date:'2020-01-01'}}});
+  const old = c.dailyFocusItems([row(['old issue'])])[0];
+  const fresh = c.dailyFocusItems([row(['different issue'])])[0];
+  assert.notEqual(await c.focusIdentity(old), await c.focusIdentity(fresh));
+  const reordered = c.dailyFocusItems([row(['second','first'])])[0];
+  const stable = c.dailyFocusItems([row(['first','second'])])[0];
+  assert.equal(await c.focusIdentity(reordered), await c.focusIdentity(stable));
+});
+test('portfolio filtering searches identifiers, owners and exact groups without guessing categories', () => {
+  const c = app(async () => response({}));
+  const row = {project:{project_id:'stereo-distance',project_name:'Vision'},intelligence:{profile:{team:'研究原型',owner:'alice'}}};
+  assert.equal(c.portfolioMatches(row,'stereo','team:研究原型'),true);
+  assert.equal(c.portfolioMatches(row,'alice','team:研究原型'),true);
+  assert.equal(c.portfolioMatches(row,'','team:业务项目'),false);
+  assert.equal(c.portfolioMatches(row,'','__ungrouped__'),false);
+  assert.equal(c.portfolioMatches({project:{project_id:'p'}},'','__ungrouped__'),true);
+});
+
+
+test('overview and copied brief use explicit stage records without promoting heuristic inference', () => {
+  const c = app(async () => response({}));
+  const stage = c.briefStage({current_stage:'测试与验证',recorded_stage:{stage:'业务阶段待核实',modified_at:'2026-10-01'}});
+  assert.equal(stage.value,'业务阶段待核实');
+  assert.equal(stage.label,'记录中的阶段');
+  assert.match(stage.note,/需结合实际工作核对/);
+  assert.equal(c.briefStage({current_stage:'测试与验证'}).label,'资料推断阶段');
+});
+
+
+test('global search labels filename-only hits without claiming original content was read', () => {
+  const c=app(async () => response({}));
+  vm.runInContext('els.globalSearchResults.querySelectorAll = () => []',c);
+  c.renderGlobalSearchResults({query:'report',count:1,results:[{project_name:'Project',source_name:'report.md',source_path:'inventory-source-01/report.md',source_type:'material',metadata_only:true,snippet:'仅登记文件名'}]});
+  const html=vm.runInContext('els.globalSearchResults.innerHTML',c);
+  assert.match(html,/目录登记（未读取正文）/);
+  assert.match(html,/inventory-source-01\/report.md/);
+});
+
+
+test('project load pool limits concurrency and preserves input order', async () => {
+  const c=app(async () => response({}));let active=0,peak=0;
+  const releases=[];
+  const run=c.mapConcurrent([0,1,2,3,4,5],async n=>{active++;peak=Math.max(peak,active);await new Promise(r=>releases.push(r));active--;return n;},2);
+  for(let i=0;i<6;i++){while(!releases[i]) await new Promise(r=>setImmediate(r));releases[i]();}
+  assert.deepEqual(Array.from(await run),[0,1,2,3,4,5]);assert.equal(peak,2);
+});
+test('retry reads only failed sections and preserves successful project data', async () => {
+  const calls=[];const c=app(async path=>{calls.push(path);return response({recovered:true});});
+  vm.runInContext("renderPortfolio = () => {}; state.portfolioRows=[{project:{project_id:'p'},brief:{keep:true},briefError:false,intelligence:null,intelligenceError:true}]",c);
+  await c.retryPortfolioRow('p');
+  assert.deepEqual(calls,['/api/v1/projects/p/intelligence']);
+  assert.equal(vm.runInContext('state.portfolioRows[0].brief.keep',c),true);
+  assert.equal(vm.runInContext('state.portfolioRows[0].intelligenceError',c),false);
+  assert.equal(vm.runInContext('state.retryingProjects.size',c),0);
+});
+test('duplicate retries coalesce and late results cannot overwrite a new portfolio load', async () => {
+  let finish;let calls=0;const c=app(()=>{calls++;return new Promise(r=>finish=r);});
+  vm.runInContext("renderPortfolio=()=>{}; state.portfolioRows=[{project:{project_id:'p'},briefError:true}]",c);
+  const old=c.retryPortfolioRow('p');await c.retryPortfolioRow('p');assert.equal(calls,1);
+  vm.runInContext("state.portfolioLoadId++;state.retryingProjects.clear();state.portfolioRows=[{project:{project_id:'p'},brief:{fresh:true}}]",c);
+  finish(response({obsolete:true}));await old;
+  assert.equal(vm.runInContext('state.portfolioRows[0].brief.fresh',c),true);
+});
+
+test('failed project cards expose recovery and prevent repeated clicks while retrying', () => {
+  const c=app(async () => response({}));
+  vm.runInContext("renderDailyFocus=()=>{};els.portfolioSearch.value='';els.portfolioGrid.querySelectorAll=()=>[];state.projects=[{project_id:'p'}];state.portfolioRows=[{project:state.projects[0],briefError:true,intelligenceError:false}];",c);
+  c.renderPortfolio();
+  assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/data-portfolio-retry="p"/);
+  assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/重试未读部分/);
+  vm.runInContext("state.retryingProjects.add('p')",c);c.renderPortfolio();
+  assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/data-portfolio-retry="p" disabled/);
+});
+
+test('facts expand without losing source dates and escape material paths', () => {
+  const c = app(async () => response({}));
+  const html = c.memoryTags(['one','two','three'], false, 1, [{text:'one',path:'docs/<plan>.md',source_date:'2026-09-01'}]);
+  assert.match(html, /展开其余 2 项/);
+  assert.match(html, /three/);
+  assert.match(html, /资料日期 2026-09-01/);
+  assert.match(html, /docs\/&lt;plan&gt;.md/);
+  assert.match(html, /资料日期未知/);
+  for (const path of ['/tmp/x','../x','docs/../x','file:x','https://x','docs\\x']) assert.equal(c.materialSourceQuery(path), null);
+});
+test('source navigation ignores a project change while loading', async () => {
+  const c = app(async () => response({}));
+  let resolve, searched = false;
+  c.showIntelligenceView = () => new Promise(r => resolve = r);
+  c.runIntelligenceSearch = () => { searched = true; };
+  vm.runInContext("state.selectedProjectId='old'; state.projectLoadId=1",c);
+  const pending = c.openFactSource('docs/plan.md');
+  vm.runInContext("state.selectedProjectId='new'; state.projectLoadId=2",c);
+  resolve(); await pending;
+  assert.equal(searched,false);
+});
+
+test('dossier excludes generated inventory pages from evidence candidates', () => {
+  const {c} = intelligence(async()=>({}));
+  const facts=c.dossierFacts({materials:[
+    {path:'inventory/catalog-001.md',modified_at:'2026-10-07',facts:[{text:'Generated index summary'}]},
+    {path:'docs/report.md',modified_at:'2026-09-01',facts:[{text:'Original report evidence'}]},
+  ]});
+  assert.deepEqual(Array.from(facts,item=>item.text),['Original report evidence']);
+  assert.equal(c.changeLabel('recently_modified'),'资料修改日期');
+});
+
+
+test('dossier next step cannot borrow freshness from unrelated records', () => {
+  const {c}=intelligence(async()=>({}));
+  const next=c.dossierNextStep({next_steps:['计划核对接口'], source_status:{freshness_reference_date:'2026-10-07'},
+    next_step_evidence:[{text:'另一事项',path:'recent.md',source_date:'2026-10-07'}]});
+  assert.equal(next.text,'计划核对接口');
+  assert.equal(next.sourceDate,null);
+  assert.equal(next.path,'尚未关联原始材料');
+  const old=c.dossierNextStep({next_steps:['计划核对接口'], next_step_evidence:[{text:'计划核对接口',path:'old.md',source_date:'2026-08-01'}]});
+  assert.equal(old.sourceDate,'2026-08-01');
+  assert.equal(old.path,'old.md');
+  assert.equal(c.dossierNextStep({}).text,'尚未识别明确下一步');
 });

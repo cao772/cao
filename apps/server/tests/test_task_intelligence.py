@@ -304,3 +304,10 @@ def test_31_acceptance_tree_task_collapses_lifecycle_records():
     relations = {entry["relation"] for entry in item["evidence"]}
     assert {"requirement", "agent_finished", "test"} <= relations
     assert item["task_status"] == "implementation_done"
+
+
+def test_table_headers_remain_information_even_with_a_task_id():
+    from task_lifecycle import classify_candidate
+    assert classify_candidate("需求编号 业务架构 BA-01 应用架构 功能清单",hint="task") == "informational"
+    assert classify_candidate("下一步工作计划",hint="task") == "informational"
+    assert classify_candidate("下一步完善业务架构中的接口映射",hint="task") == "task"

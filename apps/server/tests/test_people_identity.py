@@ -301,3 +301,58 @@ def test_people_api_create_update_list_and_devices(tmp_path, monkeypatch):
     assert client.get("/api/v1/platform/people").status_code == 200
     assert client.get("/api/v1/platform/identities").status_code == 200
     assert client.get("/api/v1/platform/devices").status_code == 200
+
+
+def test_projection_reuses_history_and_invalidates_on_new_snapshot(tmp_path, monkeypatch):
+    db_path = _prepare_db(tmp_path, monkeypatch)
+    original = people_store._rebuild_identity_projection
+    calls = []
+    def rebuild():
+        calls.append(1)
+        original()
+    monkeypatch.setattr(people_store, '_rebuild_identity_projection', rebuild)
+    people_store.refresh_identity_projection()
+    people_store.refresh_identity_projection()
+    assert len(calls) == 1
+    when = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        _snapshot(conn, project_id='new-project', project_name='New project', user_id='new-user', device_id='new-device', workspace='new-workspace', when=when)
+    people_store.refresh_identity_projection()
+    assert len(calls) == 2
+    assert people_store.device_by_id('new-device')['device_id'] == 'new-device'
+    assert len(calls) == 2
+
+
+def test_concurrent_projection_requests_share_one_rebuild(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    _prepare_db(tmp_path, monkeypatch)
+    original = people_store._rebuild_identity_projection
+    calls = []
+    def rebuild():
+        calls.append(1)
+        original()
+    monkeypatch.setattr(people_store, '_rebuild_identity_projection', rebuild)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: people_store.refresh_identity_projection(), range(24)))
+    assert len(calls) == 1
+    people_store.refresh_identity_projection(force=True)
+    assert len(calls) == 2
+
+
+def test_failed_projection_is_retried_and_expired_projection_refreshes(tmp_path, monkeypatch):
+    _prepare_db(tmp_path, monkeypatch)
+    original = people_store._rebuild_identity_projection
+    calls = []
+    def rebuild():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError('temporary projection failure')
+        original()
+    monkeypatch.setattr(people_store, '_rebuild_identity_projection', rebuild)
+    with pytest.raises(RuntimeError):
+        people_store.refresh_identity_projection()
+    people_store.refresh_identity_projection()
+    assert len(calls) == 2
+    monkeypatch.setattr(people_store, '_projection_refreshed_at', people_store._projection_refreshed_at - 16)
+    people_store.refresh_identity_projection()
+    assert len(calls) == 3

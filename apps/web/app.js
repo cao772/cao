@@ -1,4 +1,4 @@
-const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, projectLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0 };
+const state = { projects: [], selectedProjectId: null, detail: null, portfolioRows: [], portfolioLoadId: 0, projectLoadId: 0, globalSearchLoadId: 0, searchPayload: null, searchKey: null, searchOffset: 0, retryingProjects: new Set() };
 
 const els = {
   projectList: document.getElementById('project-list'),
@@ -67,6 +67,10 @@ async function api(path) {
   })();
   if (cacheable) pendingReads.set(path, request);
   return request;
+}
+
+function registeredCodeRepositories(repositories) {
+  return (repositories || []).filter(item => item.role !== 'materials' && !String(item.url || '').startsWith('file:'));
 }
 
 function escapeHtml(value) {
@@ -148,10 +152,26 @@ function dailyFocusItems(rows) {
     const textOf = value => typeof value === 'string' ? value : value?.text || value?.title || '';
     const issues = [...new Set((row.brief?.issues || []).map(textOf).filter(Boolean))];
     const nextSteps = [...new Set((row.brief?.next_steps || []).map(textOf).filter(Boolean))];
+    const historical = [];
     if (row.briefError || row.intelligenceError) items.push({ row, priority: 0, kind: '来源异常', text: '部分项目资料读取失败，请打开项目核对或刷新重试。' });
-    for (const issue of issues) items.push({ row, priority: 1, kind: '待核对问题', text: issue });
-    for (const next of nextSteps) items.push({ row, priority: 2, kind: '可推进事项', text: next });
-    if (age === null || age > 14) items.push({ row, priority: 3, kind: '资料待更新', text: age === null ? '资料日期未知，请核对当前背景与进展。' : `资料距今 ${age} 天，请核对上述事项是否仍然有效。` });
+    const add = (text, priority, kind, evidence) => {
+      const source = evidence?.find(item => item.text === text);
+      // An explicit undated source stays unknown; unrelated newer documents
+      // must not rejuvenate this fact. Legacy servers retain the prior fallback.
+      const sourceDate = source ? source.source_date || null : date;
+      const sourceAge = portfolioAgeDays(sourceDate);
+      const item = { row, priority, kind, text, sourceDate };
+      if (sourceAge !== null && sourceAge > 14) historical.push(item);
+      else items.push(item);
+    };
+    for (const issue of issues) add(issue, 1, '待核对问题', row.brief?.issue_evidence);
+    for (const next of nextSteps) add(next, 2, '可推进事项', row.brief?.next_step_evidence);
+    if (historical.length) {
+      const dates = historical.map(item => item.sourceDate).sort();
+      items.push({ row, priority: 3, kind: '历史事项待核对', sourceDate: dates[dates.length - 1], evidenceKey: historical.map(item => [item.text, item.sourceDate]).sort((a, b) => a[0].localeCompare(b[0])),
+        text: `${historical.length} 条事项来自超过 14 天前的资料；请先核对是否仍然有效。原文和依据保留在项目进展中。` });
+    }
+    if (!historical.length && (age === null || age > 14)) items.push({ row, priority: 3, kind: '资料待更新', sourceDate: date, text: age === null ? '资料日期未知，请核对当前背景与进展。' : `资料距今 ${age} 天，请核对上述事项是否仍然有效。` });
   }
   return items.sort((a, b) => a.priority - b.priority);
 }
@@ -168,7 +188,7 @@ function readFocusTracking() {
 }
 async function focusIdentity(item) {
   // Age in days changes daily; source date, not age, identifies a stale-source reminder.
-  const identity = [item.row.project.project_id, item.kind, portfolioSourceDate(item.row), item.priority === 3 ? '' : item.text];
+  const identity = [item.row.project.project_id, item.kind, item.sourceDate === undefined ? portfolioSourceDate(item.row) : item.sourceDate, item.evidenceKey || (item.priority === 3 ? '' : item.text)];
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(identity)));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -214,7 +234,7 @@ async function renderDailyFocus(rows) {
   target.innerHTML = visible.length ? displayed.map(item => `<article class="daily-focus-item">
     <div><span class="badge ${item.priority < 2 ? 'warn' : 'neutral'}">${escapeHtml(item.kind)}</span><strong>${escapeHtml(projectLabel(item.row.project))}</strong></div>
     <p>${escapeHtml(item.text)}</p>
-    <small>资料日期：${escapeHtml(portfolioDate(portfolioSourceDate(item.row)))}</small>
+    <small>资料日期：${escapeHtml(portfolioDate(item.sourceDate === undefined ? portfolioSourceDate(item.row) : item.sourceDate))}</small>
     ${item.status !== 'open' ? `<small>${item.status === 'done' ? '已处理此提醒（不代表项目问题已解决）' : '明天重新提醒'}</small>` : ''}
     <div class="focus-actions"><button type="button" class="secondary-button" data-focus-project="${escapeHtml(item.row.project.project_id)}">查看依据与进展</button>
     ${item.status === 'open' ? `<button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="done">已处理</button><button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="snooze">明天再看</button>` : `<button type="button" class="secondary-button" data-focus-id="${item.id}" data-focus-action="restore">恢复关注</button>`}</div>
@@ -230,21 +250,36 @@ async function renderDailyFocus(rows) {
   }));
 }
 
+function portfolioGroup(row) {
+  return String(row.intelligence?.profile?.team || '').trim();
+}
+function portfolioMatches(row, query, group = '') {
+  const brief = row.brief || {};
+  const knowledge = row.intelligence || {};
+  const selectedGroup = group === '__ungrouped__' ? !portfolioGroup(row)
+    : !group || portfolioGroup(row) === group.slice(5);
+  const fields = [row.project.project_id, projectLabel(row.project), knowledge.profile?.description,
+    knowledge.profile?.owner, portfolioGroup(row), knowledge.context?.project?.purpose,
+    knowledge.context?.project?.current_stage, brief.current_stage, ...(brief.next_steps || [])];
+  return selectedGroup && fields.some(value => String(value || '').toLocaleLowerCase().includes(query));
+}
+
 function renderPortfolio() {
   const rows = state.portfolioRows;
   renderDailyFocus(rows);
   const incomplete = rows.some(row => row.briefError || row.intelligenceError);
   const complete = rows.filter(row => !row.briefError && !row.intelligenceError).length;
   const materialRows = rows.filter(row => row.intelligence);
-  const repoCount = materialRows.reduce((sum, row) => sum + (row.intelligence.profile?.repositories?.length || 0), 0);
+  const repoCount = materialRows.reduce((sum, row) => sum + registeredCodeRepositories(row.intelligence.profile?.repositories).length, 0);
   const materialCount = materialRows.reduce((sum, row) => sum + (row.intelligence.summary?.material_count || 0), 0);
+  const inventoryCount = materialRows.reduce((sum, row) => sum + (row.intelligence.summary?.inventory_file_count ?? row.intelligence.summary?.inventory_index_file_count ?? 0), 0);
   const attentionCount = state.projects.filter(project => project.project_state === 'attention').length;
   const oldSourceCount = rows.filter(row => (portfolioAgeDays(portfolioSourceDate(row)) ?? 0) > 14).length;
   const unknownSourceCount = rows.filter(row => !portfolioSourceDate(row)).length;
   els.portfolioOverview.innerHTML = [
-    portfolioStat('业务项目', state.projects.length, '当前已接入'),
+    portfolioStat('登记项目与资料', state.projects.length, '当前已接入'),
     portfolioStat('需要关注', attentionCount, '根据项目采集状态', attentionCount > 0),
-    portfolioStat('已识别资料', materialRows.length ? materialCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
+    portfolioStat('原材料记录', materialRows.length ? materialCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取；另有 ${inventoryCount} 页目录索引`),
     portfolioStat('关联仓库', materialRows.length ? repoCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
   ].join('');
   const status = incomplete
@@ -253,13 +288,15 @@ function renderPortfolio() {
   els.portfolioStatus.textContent = `${status}${oldSourceCount ? ` ${oldSourceCount} 个项目资料超过 14 天，建议核对。` : ''}${unknownSourceCount ? ` ${unknownSourceCount} 个项目资料时间未知。` : ''}`;
 
   const query = els.portfolioSearch.value.trim().toLocaleLowerCase();
-  let filtered = rows.filter(row => {
-    const brief = row.brief || {};
-    const knowledge = row.intelligence || {};
-    return [projectLabel(row.project), knowledge.profile?.description, knowledge.context?.project?.purpose,
-      knowledge.context?.project?.current_stage, brief.current_stage, ...(brief.next_steps || [])]
-      .some(value => String(value || '').toLocaleLowerCase().includes(query));
-  });
+  const groupSelect = document.getElementById('portfolio-group');
+  const selectedGroup = groupSelect.value || '';
+  const groups = [...new Set(rows.map(portfolioGroup).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  groupSelect.innerHTML = '<option value="">全部分组 / 团队</option>'
+    + groups.map(group => `<option value="${escapeHtml(`team:${group}`)}">${escapeHtml(group)}</option>`).join('')
+    + (rows.some(row => !portfolioGroup(row)) ? '<option value="__ungrouped__">未分组</option>' : '');
+  groupSelect.value = selectedGroup;
+  const group = groupSelect.value || '';
+  let filtered = rows.filter(row => portfolioMatches(row, query, group));
   if (document.getElementById('portfolio-attention').checked) {
     filtered = filtered.filter(row => row.project.project_state === 'attention' || row.brief?.issues?.length || row.briefError || row.intelligenceError);
   }
@@ -276,11 +313,11 @@ function renderPortfolio() {
     const knowledge = row.intelligence || {};
     const description = knowledge.profile?.description || knowledge.context?.project?.purpose || '背景资料尚未接入';
     const stage = knowledge.context?.project?.current_stage || brief.current_stage || '尚未识别';
-    const nextRaw = (brief.next_steps || [])[0] || (knowledge.context?.project?.current_work || [])[0] || '尚未识别明确下一步';
+    const nextRaw = (brief.next_steps || [])[0] || '尚未识别明确下一步';
     const next = String(nextRaw).replace(/^\s*[-*•]\s*/, '');
     const issueCount = brief.issues?.length;
     const materialCount = knowledge.summary?.material_count;
-    const repositories = knowledge.profile?.repositories?.length;
+    const repositories = registeredCodeRepositories(knowledge.profile?.repositories).length;
     const groups = knowledge.communications?.group_count;
     const sourceDate = portfolioSourceDate(row);
     const sourceAge = portfolioAgeDays(sourceDate);
@@ -288,21 +325,25 @@ function renderPortfolio() {
     return `<article class="portfolio-card">
       <div class="portfolio-card-head"><span class="portfolio-card-id">${escapeHtml(project.project_id)}</span><span class="badge ${tone}">${escapeHtml(project.project_state_label || '状态待确认')}</span></div>
       <h4>${escapeHtml(projectLabel(project))}</h4>
+      ${portfolioGroup(row) ? `<span class="badge neutral">${escapeHtml(portfolioGroup(row))}</span>` : ''}
       <p class="portfolio-card-description">${escapeHtml(description)}</p>
       <div class="portfolio-focus"><span>当前阶段</span><strong>${escapeHtml(stage)}</strong></div>
       <div class="portfolio-focus next"><span>下一步</span><strong title="${escapeHtml(next)}">${escapeHtml(next)}</strong></div>
       <div class="portfolio-facts">
         <span class="${issueCount ? 'issue' : ''}">问题 ${issueCount ?? '—'}</span>
-        <span>资料 ${materialCount ?? '—'}</span><span>仓库 ${repositories ?? '—'}</span><span>群聊 ${groups ?? '—'}</span>
+        <span>原材料 ${materialCount ?? '—'}</span>${knowledge.summary?.inventory_file_count ? `<span>目录索引 ${knowledge.summary.inventory_file_count} 页</span>` : ''}<span>仓库 ${repositories ?? '—'}</span><span>群聊 ${groups ?? '—'}</span>
       </div>
       <div class="portfolio-date${sourceAge === null || sourceAge > 14 ? ' stale' : ''}">资料日期：${escapeHtml(portfolioDate(sourceDate))}${sourceAge > 14 ? `（距今 ${sourceAge} 天，建议核对）` : ''} · 本地采集：${escapeHtml(portfolioDate(project.last_seen_at))}</div>
-      ${row.briefError || row.intelligenceError ? '<p class="portfolio-error">部分概况读取失败，详情中可能有更多信息。</p>' : ''}
+      ${row.briefError || row.intelligenceError ? `<p class="portfolio-error">部分概况读取失败，已读取内容保留。</p><button class="secondary-button" type="button" data-portfolio-retry="${escapeHtml(project.project_id)}" ${state.retryingProjects.has(project.project_id) ? 'disabled' : ''}>${state.retryingProjects.has(project.project_id) ? '正在重试…' : '重试未读部分'}</button>` : ''}
       <div class="portfolio-actions">
         <button class="portfolio-open" type="button" data-portfolio-open="${escapeHtml(project.project_id)}">查看进展</button>
         <button class="portfolio-knowledge" type="button" data-portfolio-knowledge="${escapeHtml(project.project_id)}">资料与沟通</button>
       </div>
     </article>`;
   }).join('') : `<div class="portfolio-empty">${rows.length ? '没有符合条件的项目。请清除关键词或取消待关注筛选。' : '暂无项目，等待首次采集。'}</div>`;
+  els.portfolioGrid.querySelectorAll('[data-portfolio-retry]').forEach(button => {
+    button.addEventListener('click', () => retryPortfolioRow(button.dataset.portfolioRetry));
+  });
   els.portfolioGrid.querySelectorAll('[data-portfolio-open]').forEach(button => {
     button.addEventListener('click', () => selectProject(button.dataset.portfolioOpen));
   });
@@ -314,11 +355,49 @@ function renderPortfolio() {
   });
 }
 
+async function mapConcurrent(items, worker, limit = 4) {
+  const result = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(items.length, Math.max(1, limit)) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      result[index] = await worker(items[index], index);
+    }
+  }));
+  return result;
+}
+
+async function retryPortfolioRow(projectId) {
+  const row = state.portfolioRows.find(item => item.project.project_id === projectId);
+  if (!row || state.retryingProjects.has(projectId)) return;
+  const sections = ['brief', 'intelligence'].filter(key => row[`${key}Error`]);
+  if (!sections.length) return;
+  const loadId = state.portfolioLoadId;
+  state.retryingProjects.add(projectId);
+  renderPortfolio();
+  try {
+    const results = await Promise.allSettled(sections.map(key => api(`/api/v1/projects/${encodeURIComponent(projectId)}/${key}`)));
+    if (loadId !== state.portfolioLoadId || !state.portfolioRows.includes(row)) return;
+    results.forEach((result, index) => {
+      const key = sections[index];
+      row[`${key}Error`] = result.status === 'rejected';
+      if (result.status === 'fulfilled') row[key] = result.value;
+    });
+  } finally {
+    if (loadId === state.portfolioLoadId) {
+      state.retryingProjects.delete(projectId);
+      renderPortfolio();
+    }
+  }
+}
+
 async function loadPortfolio() {
   const loadId = ++state.portfolioLoadId;
+  state.retryingProjects.clear();
   els.portfolioStatus.textContent = '正在汇总项目背景、资料和进度…';
   if (!state.portfolioRows.length) els.portfolioGrid.innerHTML = '<div class="portfolio-empty">正在读取项目概况…</div>';
-  const rows = await Promise.all(state.projects.map(async project => {
+  const rows = await mapConcurrent(state.projects, async project => {
+    if (loadId !== state.portfolioLoadId) return null;
     const encoded = encodeURIComponent(project.project_id);
     const [brief, intelligence] = await Promise.allSettled([
       api(`/api/v1/projects/${encoded}/brief`),
@@ -331,7 +410,7 @@ async function loadPortfolio() {
       briefError: brief.status === 'rejected',
       intelligenceError: intelligence.status === 'rejected',
     };
-  }));
+  });
   if (loadId !== state.portfolioLoadId) return;
   state.portfolioRows = rows;
   renderPortfolio();
@@ -381,7 +460,7 @@ function renderGlobalSearchResults(payload) {
       <strong>${escapeHtml(item.project_name)} · ${highlightEvidence(item.source_name || '未命名来源', payload.query)}</strong>
       ${item.snippet ? `<p>${highlightEvidence(item.snippet, payload.query)}</p>` : ''}
       ${item.matched_fields?.length ? `<small>命中：${escapeHtml(item.matched_fields.join('、'))}${item.locator ? ` · 位置：${escapeHtml(typeof item.locator === 'object' ? JSON.stringify(item.locator) : item.locator)}` : ''}</small>` : ''}
-      <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
+      <small>${escapeHtml(item.source_type === 'conversation' ? '授权沟通' : item.metadata_only ? '目录登记（未读取正文）' : '项目材料')} · ${escapeHtml(item.source_path || item.sender || '')} · 来源时间 ${escapeHtml(portfolioDate(item.source_time))} · 本机采集 ${escapeHtml(portfolioDate(item.observed_at))}</small>
       <button type="button" data-global-search-open="${index}">在项目中查看</button>
     </article>`).join('') : '<div class="portfolio-empty">没有找到匹配内容。试试项目名、文件名或更短的业务关键词。</div>';
   els.globalSearchResults.querySelectorAll('[data-global-search-open]').forEach(button => button.addEventListener('click', async () => {
@@ -444,6 +523,12 @@ async function runGlobalSearch(loadMore = false) {
   }
 }
 
+function briefStage(brief) {
+  const record = brief.recorded_stage;
+  return record?.stage ? {label:'记录中的阶段', value:record.stage, note:`认知记录更新 ${portfolioDate(record.modified_at)}；需结合实际工作核对`}
+    : {label:'资料推断阶段', value:brief.current_stage || '尚未识别', note:'由已采集材料自动推断，不代表最新验收状态'};
+}
+
 function metric(label, value, note = '', small = false) {
   return `
     <div class="metric-card">
@@ -462,11 +547,11 @@ function renderOverview(project, detail) {
   const contributorCount = contributors.contributor_count ?? rollup.contributor_count ?? project.contributor_count ?? 0;
   const localCount = contributors.local_contributor_count ?? rollup.local_contributor_count ?? 0;
   els.overview.innerHTML = [
-    metric('当前阶段', brief.current_stage || '尚未识别', '以最新项目资料和近期开发活动为准', true),
+    metric(briefStage(brief).label, briefStage(brief).value, briefStage(brief).note, true),
     metric('参与人员', contributorCount, localCount ? `${localCount} 人已接入本地工作区` : '根据项目仓库活动识别'),
     metric('进行中任务', summary.in_progress_task_count ?? 0, `${summary.planned_task_count ?? 0} 项明确待办`),
     metric('待处理问题', issueCount, issueCount ? '需要继续跟进' : '当前未识别到明确问题'),
-    metric('本周提交', summary.weekly_commit_count ?? 0, `${summary.weekly_merge_count ?? 0} 次代码合并`),
+    metric('本周提交', summary.weekly_commit_count ?? 0, `${summary.weekly_merge_count ?? 0} 次代码合并${brief.statistics_period?.timezone ? ` · ${brief.statistics_period.timezone} 自然周` : ''}`),
   ].join('');
 }
 
@@ -508,26 +593,49 @@ function renderTasks(detail) {
     ${hiddenCandidates ? `<div class="table-footnote">已收起 ${hiddenCandidates} 条仅来自历史资料或尚未确认的任务候选。</div>` : ''}`;
 }
 
-function memoryTags(items, blocker = false, limit = 6) {
+function materialSourceQuery(path) {
+  if (typeof path !== 'string' || !path.trim() || path.startsWith('/') || path.includes('\\') || path.includes(':') || path.split('/').some(part => part === '..' || part === '.')) return null;
+  return path.length <= 200 ? path : path.split('/').pop().slice(0, 200);
+}
+
+function factEvidenceHtml(text, evidence = []) {
+  const ref = evidence.find(item => item.text === text) || {};
+  const date = ref.source_date ? `资料日期 ${ref.source_date}` : '资料日期未知';
+  const query = materialSourceQuery(ref.path);
+  return `<div class="memory-evidence"><span>${escapeHtml(date)} · ${escapeHtml(ref.path || '材料来源未定位')}</span>${query ? `<button type="button" class="fact-source-button" data-fact-source="${escapeHtml(query)}">查找来源</button>` : ''}</div>`;
+}
+
+async function openFactSource(query) {
+  if (!materialSourceQuery(query) || !state.selectedProjectId) return;
+  const projectId = state.selectedProjectId;
+  const requestId = state.projectLoadId;
+  await showIntelligenceView();
+  if (state.selectedProjectId !== projectId || state.projectLoadId !== requestId || document.getElementById('intelligence-view').classList.contains('hidden')) return;
+  document.getElementById('intelligence-search-input').value = query;
+  await runIntelligenceSearch();
+}
+
+function memoryTags(items, blocker = false, limit = 6, evidence = []) {
   if (!items || !items.length) return '<span class="muted">暂无</span>';
-  return `<div class="memory-tags">${items.slice(0, limit).map(item => {
+  const list = values => `<div class="memory-tags">${values.map(item => {
     const text = typeof item === 'string' ? item : (item.text || item.title || item.content || JSON.stringify(item));
-    return `<span class="memory-tag${blocker ? ' blocker' : ''}">${escapeHtml(text)}</span>`;
+    return `<div class="memory-fact"><span class="memory-tag${blocker ? ' blocker' : ''}">${escapeHtml(text)}</span>${factEvidenceHtml(text, evidence)}</div>`;
   }).join('')}</div>`;
+  return list(items.slice(0, limit)) + (items.length > limit ? `<details class="memory-more"><summary>展开其余 ${items.length - limit} 项</summary>${list(items.slice(limit))}</details>` : '');
 }
 
 function renderMemory(detail) {
   const brief = detail.brief || {};
   const source = brief.source_status || {};
-  const reference = source.freshness_reference_date ? `资料更新至 ${source.freshness_reference_date}` : '';
+  const reference = brief.recorded_stage?.stage ? briefStage(brief).note : source.freshness_reference_date ? `资料更新至 ${source.freshness_reference_date}` : '资料日期未知；需核对阶段';
   const history = source.historical_fact_count ? `${source.historical_fact_count} 条历史记录已转入周度追溯` : '';
   els.projectMemory.innerHTML = `
-    <div class="memory-row stage-row"><div class="memory-label">当前阶段</div><div class="memory-value stage-value">${escapeHtml(brief.current_stage || '尚未识别')}</div>${reference ? `<div class="memory-source">${escapeHtml(reference)}</div>` : ''}</div>
-    <div class="memory-row"><div class="memory-label">已完成</div>${memoryTags(brief.completed)}</div>
-    <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(brief.in_progress)}</div>
-    <div class="memory-row"><div class="memory-label">当前问题</div>${memoryTags(brief.issues, true)}</div>
-    <div class="memory-row"><div class="memory-label">下一步</div>${memoryTags(brief.next_steps)}</div>
-    <div class="memory-row"><div class="memory-label">最新指标</div>${memoryTags(brief.latest_metrics, false, 5)}</div>
+    <div class="memory-row stage-row"><div class="memory-label">${escapeHtml(briefStage(brief).label)}</div><div class="memory-value stage-value">${escapeHtml(briefStage(brief).value)}</div>${reference ? `<div class="memory-source">${escapeHtml(reference)}</div>` : ''}</div>
+    <div class="memory-row"><div class="memory-label">已完成</div>${memoryTags(brief.completed, false, 6, brief.completed_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(brief.in_progress, false, 6, brief.in_progress_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">当前问题</div>${memoryTags(brief.issues, true, 6, brief.issue_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">下一步</div>${memoryTags(brief.next_steps, false, 6, brief.next_step_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">最新指标</div>${memoryTags(brief.latest_metrics, false, 5, brief.metric_evidence)}</div>
     ${history ? `<div class="history-note">${escapeHtml(history)}</div>` : ''}`;
 }
 
@@ -908,7 +1016,7 @@ els.portfolioRefresh.addEventListener('click', async () => {
   }
 });
 
-for (const id of ['portfolio-attention', 'portfolio-sort']) document.getElementById(id).addEventListener('change', renderPortfolio);
+for (const id of ['portfolio-attention', 'portfolio-sort', 'portfolio-group']) document.getElementById(id).addEventListener('change', renderPortfolio);
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
@@ -921,12 +1029,12 @@ document.getElementById('copy-project-brief').addEventListener('click', async ()
   const project = state.projects.find(item => item.project_id === id);
   try {
     const brief = await api(`/api/v1/projects/${encodeURIComponent(id)}/brief`);
-    const lines = [projectLabel(project || {}), `资料日期：${brief.source_status?.freshness_reference_date || '未知'}`, `当前阶段：${brief.current_stage || '尚未识别'}`];
+    const lines = [projectLabel(project || {}), `资料日期：${brief.source_status?.freshness_reference_date || '未知'}`, `${briefStage(brief).label}：${briefStage(brief).value}`, `阶段依据：${briefStage(brief).note}`];
     for (const [key, label] of [['completed', '已完成'], ['in_progress', '进行中'], ['issues', '问题'], ['next_steps', '下一步'], ['latest_metrics', '指标']]) {
       lines.push(`\n${label}`, ...(brief[key] || []).map(item => `• ${typeof item === 'string' ? item : item.text || item.title || JSON.stringify(item)}`));
       if (!brief[key]?.length) lines.push('尚未识别');
     }
-    lines.push('\n依据已采集资料整理，未调用大模型；请结合资料日期核对。');
+    lines.push('\n依据已采集资料自动汇总；请结合来源与资料日期核对，不代表最新验收状态。');
     await navigator.clipboard.writeText(lines.join('\n'));
     showToast('项目简报已复制，可粘贴到微信或文档');
   } catch (error) { showToast(`复制失败：${error.message}`, true); }
@@ -939,4 +1047,9 @@ window.addEventListener('storage', event => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !els.portfolioView.classList.contains('hidden')) renderDailyFocus(state.portfolioRows);
 });
+document.addEventListener('click', event => {
+  const button = event.target.closest?.('[data-fact-source]');
+  if (button) openFactSource(button.dataset.factSource).catch(error => showToast(`来源查找失败：${error.message}`, true));
+});
+
 bootstrap();
