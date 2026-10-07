@@ -3,7 +3,7 @@
   const el = id => document.getElementById(id);
   let bindings = [];
   let pending = null;
-  const labels = {creating_workspace:'正在创建工作区', starting_agent:'正在启动 Codex', agent_started:'Codex 已启动', unknown:'执行结果待核实，禁止重复启动'};
+  const labels = {creating_workspace:'正在创建工作区', starting_agent:'正在启动 Codex', agent_started:'Codex 已启动', blocked_compatibility:'Host 版本不兼容，已阻止后续写入', unknown:'执行结果待核实，禁止重复启动'};
   async function api(path, data) {
     const response = await fetch(`/api/v1/execution/${path}`, {
       method: data ? 'POST' : 'GET',
@@ -39,9 +39,12 @@
         const option=document.createElement('option'); option.value=String(index);
         option.textContent=`${binding.project_id} / ${binding.repository_id}`; el('repository').append(option);
       }
-      el('repository').disabled=!bindings.length; el('start').disabled=!bindings.length;
+      el('repository').disabled=!bindings.length;
+      el('start').disabled=!bindings.length || !provider.compatibility?.version_matches;
       el('refresh').disabled=false;
-      note(`本地 Host ${provider.health.version} 已连接 · ${bindings.length} 个授权仓库`);
+      note(provider.compatibility?.version_matches
+        ? `本地 Host ${provider.health.version} 已连接 · ${bindings.length} 个授权仓库`
+        : `本地 Host ${provider.health.version || '版本未知'} 不兼容，已禁止启动；需要 ${provider.compatibility?.expected_version || '已验证版本'}`);
       await refresh();
     } catch(error) { note(error.message); el('start').disabled=true; }
   };

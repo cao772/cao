@@ -2,9 +2,52 @@ import json
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
 import execution_provider as execution
+
+
+@pytest.mark.parametrize("procedure", ["workspaces.create", "agents.run", "settings.agentConfigs.list"])
+@pytest.mark.parametrize("health", [{"version": "1.37.0"}, {}, None])
+def test_incompatible_host_never_receives_mutation(monkeypatch, health, procedure):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"result": {"data": {"json": health}}})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(execution.httpx, "Client", lambda **kwargs:
+                        real_client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(HTTPException) as error:
+        execution.call({"url": "http://127.0.0.1:4879", "token": "test"},
+                       procedure, {}, mutation=procedure != "settings.agentConfigs.list")
+    assert error.value.status_code == 503
+    assert [request.method for request in requests] == ["GET"]
+    assert requests[0].url.path == "/trpc/health.check"
+
+
+def test_version_is_rechecked_for_each_mutation(monkeypatch):
+    writes = []
+    versions = iter([execution.SUPPORTED_HOST_VERSION, "changed"])
+
+    def respond(request):
+        if request.method == "GET":
+            result = {"version": next(versions)}
+        else:
+            writes.append(request.url.path)
+            result = {"ok": True}
+        return httpx.Response(200, json={"result": {"data": {"json": result}}})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(execution.httpx, "Client", lambda **kwargs:
+                        real_client(transport=httpx.MockTransport(respond), **kwargs))
+    config = {"url": "http://127.0.0.1:4879", "token": "test"}
+    execution.call(config, "workspaces.create", {}, mutation=True)
+    with pytest.raises(HTTPException):
+        execution.call(config, "agents.run", {}, mutation=True)
+    assert writes == ["/trpc/workspaces.create"]
 
 
 @pytest.fixture
@@ -105,6 +148,23 @@ def test_uncertain_agent_launch_is_persisted_without_replay(configured, monkeypa
     assert execution.launch(payload, "test-access")["status"] == "unknown"
     execution.launch(payload, "test-access")
     assert calls.count("agents.run") == 1
+
+
+def test_version_block_is_saved_without_replaying_request(configured, monkeypatch):
+    calls = []
+
+    def incompatible(config, procedure, payload=None, **kwargs):
+        calls.append(procedure)
+        raise HTTPException(503, "Host version mismatch")
+
+    monkeypatch.setattr(execution, "call", incompatible)
+    payload = request()
+    result = execution.launch(payload, "test-access")
+    assert result["status"] == "blocked_compatibility"
+    assert result["session_id"] is None
+    assert result["formal_completion"] is False
+    assert execution.launch(payload, "test-access") == result
+    assert calls == ["workspaces.create"]
 
 
 def test_read_status_never_promotes_formal_completion(configured, monkeypatch):

@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 import main
 
 router = APIRouter(prefix="/api/v1/execution", tags=["execution"])
+# Internal tRPC contract verified against this source revision, not a public API.
+SUPPORTED_HOST_VERSION = "1.36.0"
+SUPPORTED_SOURCE_REVISION = "9a50076c324b3d2575762e5bdcba6838061c8be5"
 
 
 class Launch(BaseModel):
@@ -61,6 +64,9 @@ def authorize(token: str | None) -> None:
 
 
 def call(config: dict, procedure: str, payload=None, *, mutation=False):
+    # This query also seeds defaults on an empty Host and therefore can write.
+    if mutation or procedure == "settings.agentConfigs.list":
+        require_compatible_host(call(config, "health.check"))
     try:
         with httpx.Client(timeout=45, trust_env=False, follow_redirects=False) as client:
             url = config["url"].rstrip("/") + "/trpc/" + procedure
@@ -75,6 +81,11 @@ def call(config: dict, procedure: str, payload=None, *, mutation=False):
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         # A failed response does not prove a mutation failed on the host.
         raise HTTPException(502, "本地 Host 调用未确认；写操作不会自动重试，请先检查执行记录") from None
+
+
+def require_compatible_host(health):
+    if not isinstance(health, dict) or health.get("version") != SUPPORTED_HOST_VERSION:
+        raise HTTPException(503, "Superset Host 版本不兼容，已拒绝写入；请恢复已验证版本")
 
 
 def db():
@@ -97,6 +108,10 @@ def provider(x_collector_token: str | None = Header(default=None)):
     config = settings()
     health = call(config, "health.check")
     return {"provider": "superset", "health": health,
+            "compatibility": {"expected_version": SUPPORTED_HOST_VERSION,
+                              "verified_source_revision": SUPPORTED_SOURCE_REVISION,
+                              "version_matches": isinstance(health, dict) and health.get("version") == SUPPORTED_HOST_VERSION,
+                              "runtime_revision_attested": False},
             "bindings": config.get("bindings", []), "agents": ["codex"]}
 
 
@@ -152,7 +167,11 @@ def launch(payload: Launch, x_collector_token: str | None = Header(default=None)
             }, mutation=True)
             execution["session_id"] = result["sessionId"]
             execution["status"] = "agent_started"
-        except (HTTPException, KeyError, TypeError):
+        except HTTPException as error:
+            execution["status"] = "blocked_compatibility" if error.status_code == 503 else "unknown"
+            execution["diagnostic"] = (error.detail if error.status_code == 503 else
+                                       "Host 操作结果未确认；请检查 Workspace/Session，禁止自动重放")
+        except (KeyError, TypeError):
             execution["status"] = "unknown"
             execution["diagnostic"] = "Host 操作结果未确认；请检查 Workspace/Session，禁止自动重放"
         execution["updated_at"] = main.now_utc()
