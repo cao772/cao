@@ -1,6 +1,7 @@
 FROM nginx:1.27-alpine
 
 COPY apps/web/index.html /usr/share/nginx/html/index.html
+COPY apps/web/execution.html apps/web/execution.css apps/web/execution.js /usr/share/nginx/html/
 COPY apps/web/styles.css /usr/share/nginx/html/styles.css
 COPY apps/web/settings.css /usr/share/nginx/html/settings.css
 COPY apps/web/project-intelligence.css /usr/share/nginx/html/project-intelligence.css
