@@ -2,6 +2,18 @@
 
 CAO 保存业务项目、仓库、手动任务及执行记录；Superset 负责 worktree、终端与 Codex。没有复制 Superset runtime，没有修改 Evidence Fusion。正式完成不能由进程退出或 Agent 声明决定。
 
+## PR27 合并后的最终组合验收，2026-10-07
+
+- 正式基线为 PR27 merge commit `43fb4a93118a7baa47a319a691b03a048729092a`。以普通 merge 合入 M9；两个父提交为原 M9 `007a7847b1cc06001a08ed55d5cb6581ffbc70f9` 与该正式基线，未 rebase、squash 或 force push。
+- index.html 自动合并，没有未解决冲突。对照新 origin/cao，该文件仅新增“开发执行”入口，PR27 产品结构完整保留。此次没有扩功能或导入真实业务仓库。
+- 全新组合回归310 Python /40前端通过，全部JS语法检查通过。Server/Web从组合分支直接重建，未再使用临时叠加目录。生产FastAPI63个路由方法组合无重复；Web资源实装检查通过。
+- 真实浏览器105项检查通过：24项目可读，411原材料与123页目录索引分开统计，目录不计入材料版本/变化/冲突；当前工作正常展示，下一步不借用当前工作或全局日期；无JS/API错误，开发执行入口恰好一个。兼容可启动、不兼容禁用的执行页检查再次通过。
+- 新模型任务 `M9-REAL-20261007-3628c838`：Workspace `f122bcdd-84a0-4b9a-9e3a-663b2cb7f997`，Terminal `9d206f7d-ccec-4d38-825d-623866be8ac9`。通过新部署的CAO启动Superset Codex，实际编写两份Python文件、10测试通过，验收方独立重跑10/0。
+- 从该新会话核对get_context/get_tasks及四类上报调用，中央新事件ID9/10/11/12对应started/progress/test.result/finished。Agent回复DONE；CAO检查仍为formal_completion=false、runtime_status=running，未把本地声明变成正式完成，也未把空闲交互进程标成退出。
+- 测试代码仅在公开空仓库的本地隔离worktree中，未提交或推送到该测试仓库。审查包只含脱敏事件和工具调用索引，不含上下文材料正文或完整会话日志。
+
+PR28保持Draft，交给最终审查；真实项目、运行源码SHA证明、自动MCP/Terminal关联及PR/CI回流仍在首版范围之外。
+
 ## 第二阶段真实验收，2026-10-07
 
 - PR27 仍 OPEN，正式 cao 仍为 `7d4123c`。本轮没有合并两个 PR，也没有把临时叠加镜像作为最终组合回归证据。
@@ -15,7 +27,7 @@ CAO 保存业务项目、仓库、手动任务及执行记录；Superset 负责 
 - 中央更新期间首次 started 上报连接中断，Agent 重试后成功；中央核对仅一条 started。测试工作区结果、独立测试日志、脱敏 MCP 调用索引与中央事件纳入审查包，不包含 get_context 返回的项目材料。
 - 新独立分支回归：286 Python /26前端通过，全部 JS 语法检查、Server/Web镜像构建、Web资源实装检查通过。真实浏览器检查兼容可启动、不兼容禁用且无JS错误；不兼容页面用响应拦截验证，未改真实Host。
 
-下一门槛：PR27合并后，将最新origin/cao普通merge到此分支，处理index.html重叠，再跑新组合版完整回归。PR28继续Draft，真实项目尚未接入。
+当时的下一门槛为PR27合并及新组合验收；已在上节完成。PR28继续Draft，真实项目尚未接入。
 
 ## 本机已验证，2026-10-07
 
@@ -75,7 +87,6 @@ setup.local.sh 的依赖与 Desktop/Web/API 构建成功；Postgres 17 镜像两
 
 ## 代码与运行基线
 
-M9 分支基于正式 cao `7d4123cc9392075d1fc5254f81f0f48ce32890a1`；PR27 尚未合并，未混入 M9 Git 历史。
-本机运行镜像由被忽略的 `.local/m9-runtime` 构建，保留原部署 PR27 `93ec253` 再叠加 M9，避免回退现有页面。独立分支回归275 Python/26前端；组合版本299 Python/40前端。合并前仍需以最终cao进行集成验证。
+M9最初基于正式cao `7d4123cc9392075d1fc5254f81f0f48ce32890a1`。PR27合并后，已将正式cao `43fb4a9` 普通merge到M9，并从真实组合分支重建本机镜像。当前回归310 Python/40前端。此前 `.local/m9-runtime` 的临时叠加镜像及275/26、299/40计数仅为历史首版证据，不作为最终合并证明。
 
 边界：Host tRPC 为源码接口，版本固定，不宣称稳定公共 API；CAO deep link、自动同步、PR/CI回流、真实项目接入仍未完成。模型任务与 MCP 已在第二阶段测试工作区验证。切换Host后不会把另一Host的执行错误映射到当前Host。本轮没有 fork 发布 Superset，也没有合并 PR27。

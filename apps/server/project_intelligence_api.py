@@ -107,4 +107,5 @@ def search_project_materials(
     result["count"] = material_count + len(communications)
     result["search_indexed_file_count"] = (intelligence.get("summary") or {}).get("search_indexed_file_count", 0)
     result["content_search_available"] = bool(result["search_indexed_file_count"])
+    result["inventory_index_file_count"] = (intelligence.get("summary") or {}).get("inventory_index_file_count", 0)
     return result

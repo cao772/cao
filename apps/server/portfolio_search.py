@@ -116,6 +116,7 @@ def search_portfolio(
                         "source_id": material.get("sha256") or material.get("path"),
                         "source_name": material.get("name") or material.get("path"),
                         "source_path": material.get("path"),
+                        "metadata_only": bool(material.get("metadata_only")),
                         "source_time": material.get("modified_at"),
                         "observed_at": material.get("observed_at"),
                         "version_status": material.get("version_status"),

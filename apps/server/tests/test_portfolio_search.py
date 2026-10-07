@@ -89,3 +89,15 @@ def test_search_pagination_recent_order_and_candidate_limit_are_explicit(monkeyp
     assert first['truncated_sources'] == [{'project_id': 'p1', 'source': 'material'}]
     assert not {row['source_id'] for row in first['results']} & {row['source_id'] for row in second['results']}
     assert first['results'][0]['source_time'] == '2026-10-03'
+
+
+def test_cross_project_search_preserves_catalog_metadata_semantics(monkeypatch):
+    conn=sqlite3.connect(':memory:');conn.row_factory=sqlite3.Row
+    conn.execute('CREATE TABLE projects (project_id TEXT, project_name TEXT)');conn.execute("INSERT INTO projects VALUES ('p','Project')")
+    monkeypatch.setattr(portfolio_search.main_module,'get_db',lambda:conn)
+    monkeypatch.setattr(portfolio_search,'_material_intelligence',lambda pid:{"materials":[{"path":"inventory/catalog-001.md","_search_segments":[
+        {"text":"- 验证材料.md | 来源 inventory-source-01/验证材料.md | 修改日期 2026-09-01","locator":"第5行"}]}]})
+    found=portfolio_search.search_portfolio(q='验证材料',project_id=None,source='material',limit=30,offset=0)
+    assert found['results'][0]['source_name']=='验证材料.md'
+    assert found['results'][0]['source_path']=='inventory-source-01/验证材料.md'
+    assert found['results'][0]['metadata_only'] is True

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
+import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -337,7 +339,7 @@ def bind_identity(
         )
         _assign_identity(conn, identity["identity_id"], person_id, confirmed=True, reason="manual")
         row = _identity_by_id(conn, identity["identity_id"])
-    refresh_identity_projection()
+    refresh_identity_projection(force=True)
     return _public_identity(dict(row)) if row else {}
 
 
@@ -359,7 +361,7 @@ def unbind_identity(person_id: str, identity_id: str) -> dict[str, Any]:
             (_now(), identity_id),
         )
         row = _identity_by_id(conn, identity_id)
-    refresh_identity_projection()
+    refresh_identity_projection(force=True)
     return _public_identity(dict(row)) if row else {}
 
 
@@ -458,7 +460,42 @@ def _participation_state(last_activity_at: str | None) -> str:
     )
 
 
-def refresh_identity_projection() -> None:
+_projection_lock = threading.Lock()
+_projection_signature: tuple | None = None
+_projection_refreshed_at = 0.0
+PROJECTION_TTL_SECONDS = 15.0
+
+
+def _projection_source_signature() -> tuple:
+    # Append-only event revisions avoid repeatedly decoding all historic payloads.
+    path = platform_config.DB_PATH.resolve()
+    inode = path.stat().st_ino if path.exists() else None
+    versions = []
+    with platform_config._db() as conn:
+        for table in ("snapshots", "agent_events", "remote_events"):
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                row = conn.execute(f"SELECT MAX(id), COUNT(*) FROM {table}").fetchone()
+                versions.append(tuple(row))
+            else:
+                versions.append(None)
+    return (str(path), inode, *versions)
+
+
+def refresh_identity_projection(*, force: bool = False) -> None:
+    global _projection_signature, _projection_refreshed_at
+    # Coalesce simultaneous portfolio requests; publish a cache marker only after
+    # the transaction succeeds. Binding/unbinding explicitly bypasses reuse.
+    with _projection_lock:
+        signature = _projection_source_signature()
+        now = time.monotonic()
+        if not force and signature == _projection_signature and now - _projection_refreshed_at < PROJECTION_TTL_SECONDS:
+            return
+        _rebuild_identity_projection()
+        _projection_signature = signature
+        _projection_refreshed_at = time.monotonic()
+
+
+def _rebuild_identity_projection() -> None:
     init_people_db()
     with platform_config._db() as conn:
         conn.execute("DELETE FROM devices")

@@ -192,3 +192,84 @@ def test_newer_metric_family_wins_and_weekly_progress_is_grouped():
     assert all("227项" not in item for item in brief["latest_metrics"])
     assert brief["weekly_progress"][0]["week_key"] == "2026-W36"
     assert "完成1431条样本验证" in brief["weekly_progress"][0]["completed"]
+
+
+def test_issue_records_reject_headers_and_success_negation_but_keep_real_failures():
+    record = snapshot({
+        "blockers": [
+            {"text": "存在问题"}, {"text": "问题清单："},
+            {"text": "验证批次无失败、无异常"},
+            {"text": "回归 272 passed, 0 failed, 0 errors"},
+            {"text": "正式接口仍待确认", "path": "minutes.md", "source_date": "2026-10-01"},
+        ],
+        "tests": [{"text": "272 passed，但上线失败"},
+                  {"text": "0 passed, 3 failed"},
+                  {"text": "272 passed，异常处理功能覆盖通过"}],
+    })
+    brief = build_project_brief([record], {"work_items": []})
+    assert brief["issues"] == ["正式接口仍待确认", "272 passed，但上线失败", "0 passed, 3 failed"]
+    assert brief["issue_evidence"][0]["path"] == "minutes.md"
+    assert brief["issue_evidence"][0]["source_date"] == "2026-10-01"
+    assert brief["issue_evidence"][1]["source_date"] is None
+
+
+def test_next_steps_do_not_promote_template_headers_or_ui_behavior_to_todos():
+    template = "需求编号 业务架构 （依据 BA-01填写） 应用架构 功能清单"
+    behavior = "输入：选择中断批次。操作与处理：确认继续执行未完成验证。"
+    brief = build_project_brief([snapshot({"tasks":[{"text":"下一步工作计划"}, {"text":behavior}, {"text":"下一步完成接口回归"}]})],
+        {"work_items":[{"title":template,"task_id":"BA-02","status":"planned"}]})
+    assert brief["next_steps"] == ["下一步完成接口回归"]
+    assert brief["summary"]["planned_task_count"] == 0
+
+
+def test_this_week_uses_calendar_boundary_and_rejects_future_events():
+    now = datetime(2026,10,6,6,0,tzinfo=timezone.utc)
+    events = [{"event_type":"git.commit", "commit_sha":sha,"observed_at":stamp}
+              for sha,stamp in [("last-week","2026-10-04T23:59:59Z"),
+                                ("boundary","2026-10-05T00:00:00Z"),
+                                ("today","2026-10-06T05:00:00Z"),
+                                ("future","2026-10-06T07:00:00Z")]]
+    brief = build_project_brief([], {"work_items":[]}, events, now=now)
+    assert brief["summary"]["weekly_commit_count"] == 2
+    assert brief["summary"]["today_activity_count"] == 1
+    assert brief["statistics_period"]["week_start"] == "2026-10-05"
+    assert brief["statistics_period"]["timezone"] == "UTC"
+
+
+def test_recorded_stage_preserves_context_and_does_not_overwrite_inference():
+    def context(stage, stamp, valid=True):
+        return {"observed_at":"2026-10-06T06:00:00Z", "payload":{"project_intelligence":{"context":{
+            "valid":valid,"modified_at":stamp,"path":".project-intelligence/project_context.yaml",
+            "data":{"project":{"current_stage":stage}}}}}}
+    brief = build_project_brief([context("旧阶段","2026-09-01T00:00:00Z"),
+                                 context("业务阶段待核实","2026-10-01T00:00:00Z"),
+                                 context("错误配置","2026-10-06T00:00:00Z",False)], {"work_items":[]})
+    assert brief["recorded_stage"]["stage"] == "业务阶段待核实"
+    assert brief["current_stage"] == "尚未形成明确阶段"
+    assert build_project_brief([], {"work_items":[]})["recorded_stage"] is None
+
+
+def test_recorded_stage_reads_central_v1_files_envelope():
+    record = {"payload":{"files":{"project_intelligence":{"context":{
+        "valid":True,"data":{"project":{"current_stage":"业务阶段待核实"}}}}}}}
+    assert build_project_brief([record], {"work_items":[]})["recorded_stage"]["stage"] == "业务阶段待核实"
+
+
+def test_completed_and_metrics_preserve_fact_level_source():
+    recorded = snapshot({"progress": [{"text": "已完成回归，227项通过", "path": "reports/regression.md", "source_date": "2026-09-01"}], "tests": [], "tasks": [], "blockers": [], "requirements": []})
+    brief = build_project_brief([recorded], {"work_items": []})
+    assert brief["completed_evidence"]
+    assert brief["completed_evidence"][0]["path"] == "reports/regression.md"
+    assert brief["metric_evidence"]
+    assert brief["metric_evidence"][0]["source_date"] == "2026-09-01"
+
+
+def test_headings_and_feature_specs_are_not_project_results_or_issues():
+    recorded = snapshot({"progress": [{"text": "## 已完成"}], "tests": [], "tasks": [], "requirements": [], "blockers": [
+        {"text": "序号 需求编号 已完成进度 下一步工作 待协调问题"},
+        {"text": "输入：上传文件。操作与处理：失败时提示错误。"},
+        {"text": "真实阻塞：接口仍无法连接", "path": "notes.md"},
+    ]})
+    brief = build_project_brief([recorded], {"work_items": []})
+    assert brief["completed"] == []
+    assert brief["issues"] == ["真实阻塞：接口仍无法连接"]

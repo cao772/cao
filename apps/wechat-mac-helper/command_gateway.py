@@ -183,10 +183,14 @@ def _short(value: Any, limit: int = 110) -> str:
 def _mobile_reply(value: str, limit: int = 1450) -> str:
     if len(value) <= limit:
         return value
-    break_at = value.rfind("\n", limit // 2, limit)
+    notice = "\n（回答较长，已截取；可缩小问题范围继续问）"
+    budget = max(0, limit - len(notice))
+    if not budget:
+        return value[:max(0, limit)]
+    break_at = value.rfind("\n", budget // 2, budget)
     if break_at < 0:
-        break_at = limit
-    return value[:break_at].rstrip() + "\n（回答较长，已截取；可缩小问题范围继续问）"
+        break_at = budget
+    return value[:break_at].rstrip() + notice
 
 
 def _safe_repo_url(value: Any) -> str:
@@ -218,6 +222,33 @@ def _project_action(command: str, projects: list[dict[str, Any]]) -> tuple[str, 
     return _project_id(first, projects), action.strip() or "概览"
 
 
+def _original_materials(materials):
+    def inventory_page(item):
+        path = str(item.get("path") or "")
+        name = path.removeprefix("inventory/")
+        return path.startswith("inventory/") and (name == "LOCAL_PROJECT_INVENTORY.md" or
+            (name.startswith("catalog-") and name.endswith(".md") and name[8:-3].isdigit()))
+    return [item for item in materials or [] if isinstance(item, dict) and not inventory_page(item)]
+
+
+def _code_repositories(repositories):
+    return [repo for repo in repositories or [] if isinstance(repo, dict)
+            and repo.get("role") != "materials" and not str(repo.get("url") or "").lower().startswith("file:")]
+
+
+def _stage_lines(brief):
+    record = brief.get("recorded_stage") or {}
+    inferred = brief.get("current_stage")
+    if isinstance(record, dict) and record.get("stage"):
+        lines = ["记录阶段：" + _short(record["stage"], 120)]
+        if record.get("modified_at"):
+            lines.append("认知记录更新：" + str(record["modified_at"])[:10])
+        if inferred and inferred != record["stage"]:
+            lines.append("材料推断另为：" + _short(inferred, 100) + "（尚待核对）")
+        return lines
+    return ["资料推断阶段：" + _short(inferred or "待确认", 120) + "（不代表最新验收）"]
+
+
 def _search_reply(name: str, result: dict[str, Any]) -> str:
     materials = result.get("results") or []
     conversations = result.get("communications") or []
@@ -231,7 +262,7 @@ def _search_reply(name: str, result: dict[str, Any]) -> str:
         if not isinstance(material, dict):
             continue
         title = _short(material.get("name") or material.get("path") or "未命名材料", 85)
-        kind = _short(material.get("material_type_label") or "资料", 20)
+        kind = "目录元数据，未读取正文" if material.get("metadata_only") else _short(material.get("material_type_label") or "资料", 20)
         location = _short(item.get("locator"), 35)
         lines.append(f"资料｜{title}（{kind}{' · ' + location if location else ''}）")
         snippet = _short(item.get("snippet"), 130)
@@ -264,7 +295,7 @@ def global_search_command(command: str) -> str:
         if not isinstance(item, dict):
             continue
         name = _short(item.get("project_name") or item.get("project_id"), 35)
-        kind = "沟通" if item.get("source_type") == "conversation" else "资料"
+        kind = "沟通" if item.get("source_type") == "conversation" else "目录元数据，未读取正文" if item.get("metadata_only") else "资料"
         origin = _short(item.get("source_name") or item.get("source_path"), 60)
         date = str(item.get("source_time") or "")[:10]
         lines.append(f"• {name}｜{kind}｜{origin}{' · ' + date if date else ''}")
@@ -296,7 +327,7 @@ def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
         stage = project.get("current_stage") or (result.get("progress") or {}).get("current_stage")
         if stage:
             lines.append("阶段：" + _short(stage, 100))
-        repositories = profile.get("repositories") or []
+        repositories = _code_repositories(profile.get("repositories"))
         for repo in repositories[:3]:
             if isinstance(repo, dict):
                 lines.append("代码：" + _short(_safe_repo_url(repo.get("url")) or repo.get("id"), 160))
@@ -305,7 +336,7 @@ def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
             lines.append("本机采集：" + str(profile["observed_at"])[:16].replace("T", " "))
         return "\n".join(lines)[:1700]
     if action in {"代码", "仓库"}:
-        repositories = profile.get("repositories") or []
+        repositories = _code_repositories(profile.get("repositories"))
         lines = [name + "：代码仓库"]
         for repo in repositories[:6]:
             if not isinstance(repo, dict):
@@ -328,15 +359,16 @@ def _intelligence_reply(name: str, action: str, result: dict[str, Any]) -> str:
     materials = result.get("materials") or []
     if not isinstance(materials, list):
         raise ValueError("项目材料格式错误")
-    current = [m for m in materials if isinstance(m, dict) and m.get("version_status") in
+    originals = _original_materials(materials)
+    current = [m for m in originals if m.get("version_status") in
                {"current", "latest_period", "primary", "active_related", "single"}]
-    listed = sorted(current or [m for m in materials if isinstance(m, dict)],
+    listed = sorted(current or originals,
                     key=lambda m: str(m.get("modified_at") or ""), reverse=True)[:5]
-    lines = [f"{name}：已识别 {summary.get('material_count', len(materials))} 份资料，以下为当前/最新材料："]
+    lines = [f"{name}：已登记 {len(originals)} 份原材料元数据，另有 {len(materials)-len(originals)} 页目录索引；以下按材料版本及修改日期列出："]
     for material in listed:
         modified = str(material.get("modified_at") or "")[:10]
         lines.append(f"• {_short(material.get('name') or material.get('path'), 95)}"
-                     f"（{_short(material.get('material_type_label') or '资料', 20)}"
+                     f"（{'目录元数据，未读取正文' if material.get('metadata_only') else _short(material.get('material_type_label') or '资料', 20)}"
                      f"{' · ' + modified if modified else ''}）")
         if material.get("summary"):
             lines.append("  " + _short(material["summary"], 110))
@@ -373,7 +405,10 @@ def project_command(command: str) -> str:
     result = _json_request(f"{CENTRAL}/api/v1/projects/{project_id}/brief")
     if not isinstance(result, dict):
         raise ValueError("项目简报格式错误")
-    lines = [name, f"阶段：{result.get('current_stage') or '待确认'}"]
+    lines = [name] + _stage_lines(result)
+    source = result.get("source_status") or {}
+    if isinstance(source, dict) and source.get("freshness_reference_date"):
+        lines.append("资料基准：" + str(source["freshness_reference_date"])[:10] + "；以下为资料摘录，需核对现状")
     if action in {"概览", "进度"}:
         lines += _lines("已完成", result.get("completed"))
         lines += _lines("进行中", result.get("in_progress"))
@@ -386,12 +421,9 @@ def project_command(command: str) -> str:
         lines.append(f"任务：进行中 {summary.get('in_progress_task_count', 0)}，已完成 {summary.get('completed_task_count', 0)}，待处理 {summary.get('attention_task_count', 0)}")
     if action in {"概览", "进度", "指标"}:
         lines += _lines("指标", result.get("latest_metrics"))
-    if action == "指标" and len(lines) == 2:
+    if action == "指标" and not result.get("latest_metrics"):
         lines.append("暂无可确认的最新指标。")
-    source = result.get("source_status") or {}
-    if isinstance(source, dict) and source.get("freshness_reference_date"):
-        lines.append("资料基准：" + str(source["freshness_reference_date"])[:10])
-    return "\n".join(lines)[:1700]
+    return _mobile_reply("\n".join(lines), 1700)
 
 
 def codex_command(command: str, *, readonly: bool) -> str:
@@ -451,18 +483,19 @@ def _intelligence_facts(project_id: str) -> dict[str, Any]:
     if not isinstance(project, dict):
         project = {}
     repositories = []
-    for raw in (profile.get("repositories") or [])[:6]:
+    for raw in _code_repositories(profile.get("repositories"))[:6]:
         if isinstance(raw, dict):
             repositories.append({**{key: raw.get(key) for key in ("id", "role", "provider", "branch", "head")},
                                  "url": _safe_repo_url(raw.get("url"))})
     current_statuses = {"current", "latest_period", "primary", "active_related", "single"}
-    materials = [item for item in data.get("materials") or [] if isinstance(item, dict)]
+    materials = _original_materials(data.get("materials"))
     materials.sort(key=lambda item: (item.get("version_status") in current_statuses,
                                      str(item.get("modified_at") or "")), reverse=True)
     selected_materials = [
         {"name": item.get("name"), "path": item.get("path"),
          "type": item.get("material_type_label"), "summary": _short(item.get("summary"), 350),
-         "modified_at": item.get("modified_at"), "version_status": item.get("version_status")}
+         "modified_at": item.get("modified_at"), "version_status": item.get("version_status"),
+         "metadata_only": bool(item.get("metadata_only"))}
         for item in materials[:8]
     ]
     known_facts = []
@@ -513,7 +546,7 @@ def project_question(command: str) -> str:
         facts.append({
             "project_id": project_id,
             "project_name": project.get("project_name"),
-            **{key: brief.get(key) for key in ("current_stage", "completed", "in_progress", "issues", "next_steps", "latest_metrics", "summary", "source_status")},
+            **{key: brief.get(key) for key in ("current_stage", "recorded_stage", "current_stage_basis", "completed", "in_progress", "issues", "issue_evidence", "next_steps", "next_step_evidence", "latest_metrics", "summary", "source_status", "statistics_period")},
         })
         if explicitly_selected:
             try:

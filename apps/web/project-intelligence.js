@@ -103,6 +103,10 @@ function dossierSourceLink(source) {
   return escapeHtml(source);
 }
 
+function isInventoryMaterial(item) {
+  return item.generated_inventory === true || /^inventory\/(?:LOCAL_PROJECT_INVENTORY|catalog-\d{3})\.md$/.test(item.path || '');
+}
+
 function dossierFacts(data) {
   const facts = [];
   const seen = new Set();
@@ -116,7 +120,7 @@ function dossierFacts(data) {
     add({ text: intelligenceListText(fact), source: fact.source, date: data.context?.generated_at, observed: data.profile?.observed_at, label: '项目认知记录' });
   }
   const materials = [...(data.materials || [])]
-    .filter(item => !['historical', 'period_history'].includes(item.version_status))
+    .filter(item => !isInventoryMaterial(item) && !['historical', 'period_history'].includes(item.version_status))
     .sort((a, b) => String(b.modified_at || '').localeCompare(String(a.modified_at || '')));
   for (const material of materials) {
     for (const fact of (material.facts || []).slice(0, 2)) {
@@ -125,6 +129,13 @@ function dossierFacts(data) {
     if (facts.length >= 8) break;
   }
   return facts.slice(0, 5);
+}
+
+function dossierNextStep(progress = {}) {
+  const text = intelligenceListText((progress.next_steps || [])[0] || '尚未识别明确下一步');
+  const ref = (progress.next_step_evidence || []).find(item => item.text === text) || {};
+  return { text: text.replace(/^\s*[-*•]\s*/, ''), sourceDate: ref.source_date || null,
+    path: ref.path || '尚未关联原始材料', observedAt: ref.observed_at || null };
 }
 
 function renderDossier(data) {
@@ -148,17 +159,15 @@ function renderDossier(data) {
   const purposeSource = project.purpose
     ? `项目认知文件 · 更新 ${dossierDate(context.modified_at || context.generated_at)} · 本地采集 ${dossierDate(profile.observed_at)}`
     : `本地项目登记 · 采集 ${dossierDate(profile.observed_at)} · 未标原始资料日期`;
-  const nextFromContext = (context.current_work || [])[0];
-  const rawNext = intelligenceListText(nextFromContext || (progress.next_steps || [])[0] || '尚未识别明确下一步');
-  const next = rawNext.replace(/^\s*[-*•]\s*/, '');
-  const nextRef = (progress.next_step_evidence || []).find(item => item.text === rawNext) || {};
-  const nextDate = nextFromContext ? context.modified_at || context.generated_at : nextRef.source_date || sourceDate;
+  const nextStep = dossierNextStep(progress);
+  const next = nextStep.text;
+  const nextDate = nextStep.sourceDate;
   const nextAge = dossierAgeDays(nextDate);
-  const nextOrigin = nextFromContext ? '.project-intelligence/project_context.yaml' : nextRef.path || '尚未关联原始材料';
+  const nextOrigin = nextStep.path;
   const decisions = (progress.decision_evidence || []).filter(item => item.text).slice(0, 3);
   const facts = dossierFacts(data);
   const materials = [...(data.materials || [])]
-    .filter(item => !['historical', 'period_history'].includes(item.version_status))
+    .filter(item => !isInventoryMaterial(item) && !['historical', 'period_history'].includes(item.version_status))
     .sort((a, b) => String(b.modified_at || '').localeCompare(String(a.modified_at || '')))
     .slice(0, 4);
   intelligenceEls.dossier.innerHTML = `
@@ -169,8 +178,8 @@ function renderDossier(data) {
         ${project.current_stage && progressStage && project.current_stage !== progressStage ? `<div class="dossier-stage-note">自动资料汇总另显示“${escapeHtml(progressStage)}”；两种判断尚未核对一致。</div>` : ''}
         ${stageEvidenceHtml}
       </div>
-      <div class="dossier-field"><div class="dossier-field-label">资料中的下一步</div><div class="dossier-field-value">${escapeHtml(next)}</div><div class="dossier-field-source${nextAge === null || nextAge > 14 ? ' warn' : ''}">${escapeHtml(nextOrigin)} · 资料日期 ${escapeHtml(dossierDate(nextDate))} · 本地采集 ${escapeHtml(dossierDate(nextRef.observed_at || profile.observed_at))}${nextAge > 14 ? ` · 距今 ${nextAge} 天，是否仍待办需确认` : ''}</div></div>
-      <div class="dossier-field"><div class="dossier-field-label">登记负责人</div><div class="dossier-field-value">${escapeHtml(profile.owner || '未登记')}</div><div class="dossier-field-source">项目档案 · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}；已关联 ${profile.repositories?.length || 0} 个仓库</div></div>
+      <div class="dossier-field"><div class="dossier-field-label">资料中的下一步</div><div class="dossier-field-value">${escapeHtml(next)}</div><div class="dossier-field-source${nextAge === null || nextAge > 14 ? ' warn' : ''}">${escapeHtml(nextOrigin)} · 资料日期 ${escapeHtml(dossierDate(nextDate))} · 本地采集 ${escapeHtml(dossierDate(nextStep.observedAt || profile.observed_at))}${nextAge > 14 ? ` · 距今 ${nextAge} 天，是否仍待办需确认` : ''}</div></div>
+      <div class="dossier-field"><div class="dossier-field-label">登记负责人</div><div class="dossier-field-value">${escapeHtml(profile.owner || '未登记')}</div><div class="dossier-field-source">项目档案 · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}；已关联 ${registeredCodeRepositories(profile.repositories).length} 个仓库</div></div>
     </div>
     <div class="dossier-subgrid">
       <div class="dossier-section"><h4>可追溯的事实摘录</h4><p class="dossier-section-note">记录原始链接或材料路径。摘录不等于已完成验收。</p>
@@ -212,10 +221,11 @@ function renderIntelligenceSummary(data) {
   const summary = data.summary || {};
   const context = data.context || {};
   const cards = [
-    ['项目材料', summary.material_count || 0],
+    ['原材料记录', summary.material_count || 0],
     ['材料系列', summary.series_count || 0],
     ['多版本材料', summary.multi_version_series_count || 0],
     ['可搜正文', summary.search_indexed_file_count || 0],
+    ['目录索引页', summary.inventory_file_count ?? summary.inventory_index_file_count ?? 0],
     ['待确认问题', summary.health_issue_count || 0],
   ];
   intelligenceEls.summary.innerHTML = cards.map(([label, value]) => `
@@ -235,9 +245,9 @@ function renderIntelligenceSummary(data) {
     </div>`;
 }
 
-function progressItems(items, emptyText) {
+function progressItems(items, emptyText, evidence = []) {
   if (!items?.length) return `<div class="intelligence-empty compact-empty">${escapeHtml(emptyText)}</div>`;
-  const list = values => `<ul class="progress-list">${values.map(item => `<li>${escapeHtml(intelligenceListText(item).replace(/^\s*[-*•]\s*/, ''))}</li>`).join('')}</ul>`;
+  const list = values => `<ul class="progress-list">${values.map(item => `<li>${escapeHtml(intelligenceListText(item).replace(/^\s*[-*•]\s*/, ''))}${evidence.length ? factEvidenceHtml(intelligenceListText(item), evidence) : ''}</li>`).join('')}</ul>`;
   return list(items.slice(0, 6)) + (items.length > 6
     ? `<details class="progress-more"><summary>展开其余 ${items.length - 6} 项</summary>${list(items.slice(6))}</details>` : '');
 }
@@ -256,11 +266,11 @@ function renderProgress(data) {
     <div class="dossier-field-source">${escapeHtml(source)}；请结合实际工作核对，不代表验收结果。</div>
     ${recordedStage && inferredStage && recordedStage !== inferredStage ? `<div class="dossier-stage-note">材料自动汇总推断为“${escapeHtml(inferredStage)}”（资料日期 ${escapeHtml(materialDate)}），与认知记录不同，尚待核对。</div>` : ''}
     ${context.current_work?.length ? `<div class="progress-section"><strong>认知记录中的当前工作</strong><div class="dossier-field-source">更新 ${escapeHtml(contextDate)}；不代表正在执行的任务状态。</div>${progressItems(context.current_work, '')}</div>` : ''}
-    <div class="progress-section"><strong>资料摘录：已完成</strong>${progressItems(progress.completed, '尚未从已采集资料中提取到已完成事项，不代表项目没有成果。')}</div>
-    <div class="progress-section"><strong>资料摘录：进行中</strong>${progressItems(progress.in_progress, '尚未识别到明确的进行中任务，不代表无人开展工作。')}</div>
+    <div class="progress-section"><strong>资料摘录：已完成</strong>${progressItems(progress.completed, '尚未从已采集资料中提取到已完成事项，不代表项目没有成果。', progress.completed_evidence || [])}</div>
+    <div class="progress-section"><strong>资料摘录：进行中</strong>${progressItems(progress.in_progress, '尚未识别到明确的进行中任务，不代表无人开展工作。', progress.in_progress_evidence || [])}</div>
     ${context.known_issues?.length ? `<div class="progress-section"><strong>认知记录中的已知问题</strong><div class="dossier-field-source">更新 ${escapeHtml(contextDate)}</div>${progressItems(context.known_issues, '')}</div>` : ''}
-    <div class="progress-section"><strong>资料摘录：待处理问题</strong>${progressItems(progress.issues, '已采集资料尚未提取到问题，不能据此判断项目没有问题。')}</div>
-    <div class="progress-section"><strong>资料摘录：下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步')}</div>`;
+    <div class="progress-section"><strong>资料摘录：待处理问题</strong>${progressItems(progress.issues, '已采集资料尚未提取到问题，不能据此判断项目没有问题。', progress.issue_evidence || [])}</div>
+    <div class="progress-section"><strong>资料摘录：下一步</strong>${progressItems(progress.next_steps, '尚未从资料中识别下一步', progress.next_step_evidence || [])}</div>`;
 }
 
 function repositoryLabel(repository) {
@@ -276,6 +286,9 @@ function renderRepositories(data) {
     return;
   }
   intelligenceEls.repositories.innerHTML = `<div class="repository-list">${repositories.map(repository => {
+    if (repository.role === 'materials' || String(repository.url || '').startsWith('file:')) {
+      return `<div class="repository-item"><div><strong>本地资料来源</strong><div class="intelligence-list-path">${escapeHtml(repository.url || '')}</div></div><div class="repository-meta"><span>未绑定 Git 仓库</span><span>仅登记资料目录，不表示存在分支、提交或上游同步</span></div></div>`;
+    }
     const provider = repository.provider || '本机';
     const branch = repository.branch || '未识别分支';
     const head = repository.head ? String(repository.head).slice(0, 10) : '未识别 SHA';
@@ -332,7 +345,7 @@ function changeLabel(type) {
     removed: '移除',
     modified: '修改',
     context_updated: '项目认知更新',
-    recently_modified: '近期修改',
+    recently_modified: '资料修改日期',
   }[type] || type || '变化';
 }
 
@@ -342,13 +355,13 @@ function renderRecentChanges(data) {
     intelligenceEls.changes.innerHTML = '<div class="intelligence-empty">暂无材料变化记录</div>';
     return;
   }
-  intelligenceEls.changes.innerHTML = `<div class="intelligence-list">${changes.slice(0, 30).map(item => `
+  intelligenceEls.changes.innerHTML = `${data.recent_changes_basis === 'modified_time' ? '<div class="dossier-field-source">未识别到连续快照中的材料变更；以下按文件修改日期列出，不代表近期新增进展。目录索引不参与此列表。</div>' : ''}<div class="intelligence-list">${changes.slice(0, 30).map(item => `
     <div class="intelligence-list-item">
       <div class="intelligence-list-main">
         <div class="intelligence-list-title"><strong>${escapeHtml(item.name || item.path || '材料变化')}</strong><span class="badge info">${escapeHtml(changeLabel(item.change_type))}</span></div>
         <div class="intelligence-list-path">${escapeHtml(item.path || '')}</div>
       </div>
-      <div class="intelligence-list-meta"><span>${escapeHtml(item.material_type_label || '')}</span><span>${escapeHtml(intelligenceDate(item.observed_at || item.modified_at))}</span></div>
+      <div class="intelligence-list-meta"><span>${escapeHtml(item.material_type_label || '')}</span><span>${escapeHtml(intelligenceDate(item.change_type === 'recently_modified' ? item.modified_at : item.observed_at || item.modified_at))}</span></div>
     </div>`).join('')}</div>`;
 }
 
@@ -380,7 +393,7 @@ function renderSearchResults(payload) {
   const contentHint = payload.content_search_available
     ? `已建立 ${payload.search_indexed_file_count || 0} 份材料正文索引，可定位正文位置。`
     : '当前可搜索文件名、路径、用途和已抽取摘要；若需正文定位，请在平台配置中启用“本机读取资料内容”。';
-  intelligenceEls.searchStatus.textContent = `找到 ${payload.count || 0} 项。${contentHint}`;
+  intelligenceEls.searchStatus.textContent = `找到 ${payload.count || 0} 项。${contentHint}${payload.inventory_index_file_count ? ` 另有 ${payload.inventory_index_file_count} 页文件名索引，仅登记目录元数据。` : ''}`;
   if (!results.length) {
     intelligenceEls.searchResults.innerHTML = '<div class="intelligence-empty">没有找到匹配材料。可以尝试文件名、编号、金额、功能名称、合同条款或正文关键词。</div>';
     return;
@@ -399,7 +412,7 @@ function renderSearchResults(payload) {
       </div>
       ${item.snippet ? `<div class="search-result-snippet">${escapeHtml(item.snippet)}</div>` : ''}
       <div class="search-result-footer">
-        <span>${escapeHtml(material.material_type_label || '其他资料')}</span>
+        <span>${escapeHtml(material.metadata_only ? '目录登记（未读取正文）' : material.material_type_label || '其他资料')}</span>
         ${locator ? `<span>${escapeHtml(locator)}</span>` : ''}
         ${purpose ? `<span>${escapeHtml(purpose)}</span>` : ''}
         <span>最近修改 ${escapeHtml(intelligenceDate(material.modified_at))}</span>
