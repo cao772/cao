@@ -344,3 +344,17 @@ test('dossier excludes generated inventory pages from evidence candidates', () =
   assert.deepEqual(Array.from(facts,item=>item.text),['Original report evidence']);
   assert.equal(c.changeLabel('recently_modified'),'资料修改日期');
 });
+
+
+test('dossier next step cannot borrow freshness from unrelated records', () => {
+  const {c}=intelligence(async()=>({}));
+  const next=c.dossierNextStep({next_steps:['计划核对接口'], source_status:{freshness_reference_date:'2026-10-07'},
+    next_step_evidence:[{text:'另一事项',path:'recent.md',source_date:'2026-10-07'}]});
+  assert.equal(next.text,'计划核对接口');
+  assert.equal(next.sourceDate,null);
+  assert.equal(next.path,'尚未关联原始材料');
+  const old=c.dossierNextStep({next_steps:['计划核对接口'], next_step_evidence:[{text:'计划核对接口',path:'old.md',source_date:'2026-08-01'}]});
+  assert.equal(old.sourceDate,'2026-08-01');
+  assert.equal(old.path,'old.md');
+  assert.equal(c.dossierNextStep({}).text,'尚未识别明确下一步');
+});

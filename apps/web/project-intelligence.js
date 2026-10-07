@@ -131,6 +131,13 @@ function dossierFacts(data) {
   return facts.slice(0, 5);
 }
 
+function dossierNextStep(progress = {}) {
+  const text = intelligenceListText((progress.next_steps || [])[0] || '尚未识别明确下一步');
+  const ref = (progress.next_step_evidence || []).find(item => item.text === text) || {};
+  return { text: text.replace(/^\s*[-*•]\s*/, ''), sourceDate: ref.source_date || null,
+    path: ref.path || '尚未关联原始材料', observedAt: ref.observed_at || null };
+}
+
 function renderDossier(data) {
   const profile = data.profile || {};
   const context = data.context || {};
@@ -152,13 +159,11 @@ function renderDossier(data) {
   const purposeSource = project.purpose
     ? `项目认知文件 · 更新 ${dossierDate(context.modified_at || context.generated_at)} · 本地采集 ${dossierDate(profile.observed_at)}`
     : `本地项目登记 · 采集 ${dossierDate(profile.observed_at)} · 未标原始资料日期`;
-  const nextFromContext = (context.current_work || [])[0];
-  const rawNext = intelligenceListText(nextFromContext || (progress.next_steps || [])[0] || '尚未识别明确下一步');
-  const next = rawNext.replace(/^\s*[-*•]\s*/, '');
-  const nextRef = (progress.next_step_evidence || []).find(item => item.text === rawNext) || {};
-  const nextDate = nextFromContext ? context.modified_at || context.generated_at : nextRef.source_date || sourceDate;
+  const nextStep = dossierNextStep(progress);
+  const next = nextStep.text;
+  const nextDate = nextStep.sourceDate;
   const nextAge = dossierAgeDays(nextDate);
-  const nextOrigin = nextFromContext ? '.project-intelligence/project_context.yaml' : nextRef.path || '尚未关联原始材料';
+  const nextOrigin = nextStep.path;
   const decisions = (progress.decision_evidence || []).filter(item => item.text).slice(0, 3);
   const facts = dossierFacts(data);
   const materials = [...(data.materials || [])]
@@ -173,7 +178,7 @@ function renderDossier(data) {
         ${project.current_stage && progressStage && project.current_stage !== progressStage ? `<div class="dossier-stage-note">自动资料汇总另显示“${escapeHtml(progressStage)}”；两种判断尚未核对一致。</div>` : ''}
         ${stageEvidenceHtml}
       </div>
-      <div class="dossier-field"><div class="dossier-field-label">资料中的下一步</div><div class="dossier-field-value">${escapeHtml(next)}</div><div class="dossier-field-source${nextAge === null || nextAge > 14 ? ' warn' : ''}">${escapeHtml(nextOrigin)} · 资料日期 ${escapeHtml(dossierDate(nextDate))} · 本地采集 ${escapeHtml(dossierDate(nextRef.observed_at || profile.observed_at))}${nextAge > 14 ? ` · 距今 ${nextAge} 天，是否仍待办需确认` : ''}</div></div>
+      <div class="dossier-field"><div class="dossier-field-label">资料中的下一步</div><div class="dossier-field-value">${escapeHtml(next)}</div><div class="dossier-field-source${nextAge === null || nextAge > 14 ? ' warn' : ''}">${escapeHtml(nextOrigin)} · 资料日期 ${escapeHtml(dossierDate(nextDate))} · 本地采集 ${escapeHtml(dossierDate(nextStep.observedAt || profile.observed_at))}${nextAge > 14 ? ` · 距今 ${nextAge} 天，是否仍待办需确认` : ''}</div></div>
       <div class="dossier-field"><div class="dossier-field-label">登记负责人</div><div class="dossier-field-value">${escapeHtml(profile.owner || '未登记')}</div><div class="dossier-field-source">项目档案 · 本地采集 ${escapeHtml(dossierDate(profile.observed_at))}；已关联 ${registeredCodeRepositories(profile.repositories).length} 个仓库</div></div>
     </div>
     <div class="dossier-subgrid">

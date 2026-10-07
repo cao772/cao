@@ -313,7 +313,7 @@ function renderPortfolio() {
     const knowledge = row.intelligence || {};
     const description = knowledge.profile?.description || knowledge.context?.project?.purpose || '背景资料尚未接入';
     const stage = knowledge.context?.project?.current_stage || brief.current_stage || '尚未识别';
-    const nextRaw = (brief.next_steps || [])[0] || (knowledge.context?.project?.current_work || [])[0] || '尚未识别明确下一步';
+    const nextRaw = (brief.next_steps || [])[0] || '尚未识别明确下一步';
     const next = String(nextRaw).replace(/^\s*[-*•]\s*/, '');
     const issueCount = brief.issues?.length;
     const materialCount = knowledge.summary?.material_count;
