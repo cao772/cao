@@ -253,3 +253,23 @@ def test_recorded_stage_reads_central_v1_files_envelope():
     record = {"payload":{"files":{"project_intelligence":{"context":{
         "valid":True,"data":{"project":{"current_stage":"业务阶段待核实"}}}}}}}
     assert build_project_brief([record], {"work_items":[]})["recorded_stage"]["stage"] == "业务阶段待核实"
+
+
+def test_completed_and_metrics_preserve_fact_level_source():
+    recorded = snapshot({"progress": [{"text": "已完成回归，227项通过", "path": "reports/regression.md", "source_date": "2026-09-01"}], "tests": [], "tasks": [], "blockers": [], "requirements": []})
+    brief = build_project_brief([recorded], {"work_items": []})
+    assert brief["completed_evidence"]
+    assert brief["completed_evidence"][0]["path"] == "reports/regression.md"
+    assert brief["metric_evidence"]
+    assert brief["metric_evidence"][0]["source_date"] == "2026-09-01"
+
+
+def test_headings_and_feature_specs_are_not_project_results_or_issues():
+    recorded = snapshot({"progress": [{"text": "## 已完成"}], "tests": [], "tasks": [], "requirements": [], "blockers": [
+        {"text": "序号 需求编号 已完成进度 下一步工作 待协调问题"},
+        {"text": "输入：上传文件。操作与处理：失败时提示错误。"},
+        {"text": "真实阻塞：接口仍无法连接", "path": "notes.md"},
+    ]})
+    brief = build_project_brief([recorded], {"work_items": []})
+    assert brief["completed"] == []
+    assert brief["issues"] == ["真实阻塞：接口仍无法连接"]

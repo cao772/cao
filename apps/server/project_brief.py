@@ -88,6 +88,8 @@ def _contains_negative(text: str) -> bool:
 
 
 def _is_issue_record(text: str) -> bool:
+    if is_material_template(text) or ("序号" in text and all(marker in text for marker in ("下一步工作", "待协调问题", "需求编号"))):
+        return False
     if re.fullmatch(r"[#*\s]*?(?:存在问题|当前问题|问题清单|待处理问题|问题|无问题|暂无问题|未发现问题)[：:。.\s]*", text):
         return False
     # The collector may classify a successful test as a blocker merely because
@@ -106,7 +108,7 @@ def _completed_progress(values: list[Any]) -> list[str]:
     for value in values:
         text = _text(value)
         lower = text.lower()
-        if not text or _contains_negative(text) or _is_pending(text) or "进行中" in text:
+        if not text or is_material_template(text) or re.fullmatch(r"[#*\s]*(?:已完成|完成情况|已完成事项)[：:。\s]*", text) or _contains_negative(text) or _is_pending(text) or "进行中" in text:
             continue
         if any(marker in lower for marker in COMPLETE_MARKERS):
             result.append(text)
@@ -528,12 +530,15 @@ def build_project_brief(
         "recorded_stage": _recorded_stage(workspace_snapshots),
         "current_stage_basis": stage_basis,
         "completed": completed,
+        "completed_evidence": _source_refs(workspace_snapshots, ("progress", "tests"), completed),
         "in_progress": in_progress,
+        "in_progress_evidence": _source_refs(workspace_snapshots, ("tasks", "progress"), in_progress),
         "issues": issues,
         "issue_evidence": _source_refs(workspace_snapshots, ("blockers", "tests"), issues),
         "next_steps": next_steps,
         "next_step_evidence": next_step_evidence,
         "latest_metrics": metrics,
+        "metric_evidence": _source_refs(workspace_snapshots, ("progress", "tests"), metrics),
         "latest_metric_details": metric_details,
         "recent_decisions": decisions[:8],
         "decision_evidence": decision_evidence,

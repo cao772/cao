@@ -141,3 +141,9 @@ tr:last-child td { border-bottom: 0; }
   .main { padding-left: 22px; padding-right: 22px; }
   .contributor-grid { grid-template-columns: 1fr; }
 }
+
+.memory-fact { flex: 1 1 100%; min-width: 0; }
+.memory-evidence { display: flex; flex-wrap: wrap; gap: 5px 10px; align-items: baseline; color: #63788d; font-size: 11px; line-height: 1.6; margin: 3px 0 8px; overflow-wrap: anywhere; }
+.fact-source-button { border: 0; padding: 0; background: transparent; color: #245f99; font: inherit; text-decoration: underline; cursor: pointer; }
+.fact-source-button:focus-visible { outline: 2px solid #245f99; outline-offset: 3px; }
+.memory-more summary { color: #245f99; cursor: pointer; font-size: 12px; margin: 6px 0; }

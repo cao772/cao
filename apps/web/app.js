@@ -592,12 +592,35 @@ function renderTasks(detail) {
     ${hiddenCandidates ? `<div class="table-footnote">已收起 ${hiddenCandidates} 条仅来自历史资料或尚未确认的任务候选。</div>` : ''}`;
 }
 
-function memoryTags(items, blocker = false, limit = 6) {
+function materialSourceQuery(path) {
+  if (typeof path !== 'string' || !path.trim() || path.startsWith('/') || path.includes('\\') || path.includes(':') || path.split('/').some(part => part === '..' || part === '.')) return null;
+  return path.length <= 200 ? path : path.split('/').pop().slice(0, 200);
+}
+
+function factEvidenceHtml(text, evidence = []) {
+  const ref = evidence.find(item => item.text === text) || {};
+  const date = ref.source_date ? `资料日期 ${ref.source_date}` : '资料日期未知';
+  const query = materialSourceQuery(ref.path);
+  return `<div class="memory-evidence"><span>${escapeHtml(date)} · ${escapeHtml(ref.path || '材料来源未定位')}</span>${query ? `<button type="button" class="fact-source-button" data-fact-source="${escapeHtml(query)}">查找来源</button>` : ''}</div>`;
+}
+
+async function openFactSource(query) {
+  if (!materialSourceQuery(query) || !state.selectedProjectId) return;
+  const projectId = state.selectedProjectId;
+  const requestId = state.projectLoadId;
+  await showIntelligenceView();
+  if (state.selectedProjectId !== projectId || state.projectLoadId !== requestId || document.getElementById('intelligence-view').classList.contains('hidden')) return;
+  document.getElementById('intelligence-search-input').value = query;
+  await runIntelligenceSearch();
+}
+
+function memoryTags(items, blocker = false, limit = 6, evidence = []) {
   if (!items || !items.length) return '<span class="muted">暂无</span>';
-  return `<div class="memory-tags">${items.slice(0, limit).map(item => {
+  const list = values => `<div class="memory-tags">${values.map(item => {
     const text = typeof item === 'string' ? item : (item.text || item.title || item.content || JSON.stringify(item));
-    return `<span class="memory-tag${blocker ? ' blocker' : ''}">${escapeHtml(text)}</span>`;
+    return `<div class="memory-fact"><span class="memory-tag${blocker ? ' blocker' : ''}">${escapeHtml(text)}</span>${factEvidenceHtml(text, evidence)}</div>`;
   }).join('')}</div>`;
+  return list(items.slice(0, limit)) + (items.length > limit ? `<details class="memory-more"><summary>展开其余 ${items.length - limit} 项</summary>${list(items.slice(limit))}</details>` : '');
 }
 
 function renderMemory(detail) {
@@ -607,11 +630,11 @@ function renderMemory(detail) {
   const history = source.historical_fact_count ? `${source.historical_fact_count} 条历史记录已转入周度追溯` : '';
   els.projectMemory.innerHTML = `
     <div class="memory-row stage-row"><div class="memory-label">${escapeHtml(briefStage(brief).label)}</div><div class="memory-value stage-value">${escapeHtml(briefStage(brief).value)}</div>${reference ? `<div class="memory-source">${escapeHtml(reference)}</div>` : ''}</div>
-    <div class="memory-row"><div class="memory-label">已完成</div>${memoryTags(brief.completed)}</div>
-    <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(brief.in_progress)}</div>
-    <div class="memory-row"><div class="memory-label">当前问题</div>${memoryTags(brief.issues, true)}</div>
-    <div class="memory-row"><div class="memory-label">下一步</div>${memoryTags(brief.next_steps)}</div>
-    <div class="memory-row"><div class="memory-label">最新指标</div>${memoryTags(brief.latest_metrics, false, 5)}</div>
+    <div class="memory-row"><div class="memory-label">已完成</div>${memoryTags(brief.completed, false, 6, brief.completed_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">进行中</div>${memoryTags(brief.in_progress, false, 6, brief.in_progress_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">当前问题</div>${memoryTags(brief.issues, true, 6, brief.issue_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">下一步</div>${memoryTags(brief.next_steps, false, 6, brief.next_step_evidence)}</div>
+    <div class="memory-row"><div class="memory-label">最新指标</div>${memoryTags(brief.latest_metrics, false, 5, brief.metric_evidence)}</div>
     ${history ? `<div class="history-note">${escapeHtml(history)}</div>` : ''}`;
 }
 
@@ -1023,4 +1046,9 @@ window.addEventListener('storage', event => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !els.portfolioView.classList.contains('hidden')) renderDailyFocus(state.portfolioRows);
 });
+document.addEventListener('click', event => {
+  const button = event.target.closest?.('[data-fact-source]');
+  if (button) openFactSource(button.dataset.factSource).catch(error => showToast(`来源查找失败：${error.message}`, true));
+});
+
 bootstrap();

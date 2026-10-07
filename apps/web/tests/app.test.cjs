@@ -312,3 +312,25 @@ test('failed project cards expose recovery and prevent repeated clicks while ret
   vm.runInContext("state.retryingProjects.add('p')",c);c.renderPortfolio();
   assert.match(vm.runInContext('els.portfolioGrid.innerHTML',c),/data-portfolio-retry="p" disabled/);
 });
+
+test('facts expand without losing source dates and escape material paths', () => {
+  const c = app(async () => response({}));
+  const html = c.memoryTags(['one','two','three'], false, 1, [{text:'one',path:'docs/<plan>.md',source_date:'2026-09-01'}]);
+  assert.match(html, /展开其余 2 项/);
+  assert.match(html, /three/);
+  assert.match(html, /资料日期 2026-09-01/);
+  assert.match(html, /docs\/&lt;plan&gt;.md/);
+  assert.match(html, /资料日期未知/);
+  for (const path of ['/tmp/x','../x','docs/../x','file:x','https://x','docs\\x']) assert.equal(c.materialSourceQuery(path), null);
+});
+test('source navigation ignores a project change while loading', async () => {
+  const c = app(async () => response({}));
+  let resolve, searched = false;
+  c.showIntelligenceView = () => new Promise(r => resolve = r);
+  c.runIntelligenceSearch = () => { searched = true; };
+  vm.runInContext("state.selectedProjectId='old'; state.projectLoadId=1",c);
+  const pending = c.openFactSource('docs/plan.md');
+  vm.runInContext("state.selectedProjectId='new'; state.projectLoadId=2",c);
+  resolve(); await pending;
+  assert.equal(searched,false);
+});
