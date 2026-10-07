@@ -272,13 +272,14 @@ function renderPortfolio() {
   const materialRows = rows.filter(row => row.intelligence);
   const repoCount = materialRows.reduce((sum, row) => sum + registeredCodeRepositories(row.intelligence.profile?.repositories).length, 0);
   const materialCount = materialRows.reduce((sum, row) => sum + (row.intelligence.summary?.material_count || 0), 0);
+  const inventoryCount = materialRows.reduce((sum, row) => sum + (row.intelligence.summary?.inventory_file_count ?? row.intelligence.summary?.inventory_index_file_count ?? 0), 0);
   const attentionCount = state.projects.filter(project => project.project_state === 'attention').length;
   const oldSourceCount = rows.filter(row => (portfolioAgeDays(portfolioSourceDate(row)) ?? 0) > 14).length;
   const unknownSourceCount = rows.filter(row => !portfolioSourceDate(row)).length;
   els.portfolioOverview.innerHTML = [
     portfolioStat('登记项目与资料', state.projects.length, '当前已接入'),
     portfolioStat('需要关注', attentionCount, '根据项目采集状态', attentionCount > 0),
-    portfolioStat('已识别资料', materialRows.length ? materialCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
+    portfolioStat('原材料记录', materialRows.length ? materialCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取；另有 ${inventoryCount} 页目录索引`),
     portfolioStat('关联仓库', materialRows.length ? repoCount : '—', `${materialRows.length}/${state.projects.length} 个项目可读取`),
   ].join('');
   const status = incomplete
@@ -330,7 +331,7 @@ function renderPortfolio() {
       <div class="portfolio-focus next"><span>下一步</span><strong title="${escapeHtml(next)}">${escapeHtml(next)}</strong></div>
       <div class="portfolio-facts">
         <span class="${issueCount ? 'issue' : ''}">问题 ${issueCount ?? '—'}</span>
-        <span>资料 ${materialCount ?? '—'}</span><span>仓库 ${repositories ?? '—'}</span><span>群聊 ${groups ?? '—'}</span>
+        <span>原材料 ${materialCount ?? '—'}</span>${knowledge.summary?.inventory_file_count ? `<span>目录索引 ${knowledge.summary.inventory_file_count} 页</span>` : ''}<span>仓库 ${repositories ?? '—'}</span><span>群聊 ${groups ?? '—'}</span>
       </div>
       <div class="portfolio-date${sourceAge === null || sourceAge > 14 ? ' stale' : ''}">资料日期：${escapeHtml(portfolioDate(sourceDate))}${sourceAge > 14 ? `（距今 ${sourceAge} 天，建议核对）` : ''} · 本地采集：${escapeHtml(portfolioDate(project.last_seen_at))}</div>
       ${row.briefError || row.intelligenceError ? `<p class="portfolio-error">部分概况读取失败，已读取内容保留。</p><button class="secondary-button" type="button" data-portfolio-retry="${escapeHtml(project.project_id)}" ${state.retryingProjects.has(project.project_id) ? 'disabled' : ''}>${state.retryingProjects.has(project.project_id) ? '正在重试…' : '重试未读部分'}</button>` : ''}

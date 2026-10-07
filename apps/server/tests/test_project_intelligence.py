@@ -251,3 +251,34 @@ def test_unread_declared_material_is_also_marked_as_metadata_only():
     found=search_project_intelligence(intelligence,'README.md')
     assert found['results'][0]['material']['metadata_only'] is True
     assert intelligence['summary']['search_indexed_file_count'] == 0
+
+
+def test_inventory_pages_remain_searchable_but_do_not_create_material_versions_or_changes():
+    original = {"path": "docs/周报.docx", "sha256": "business", "modified_at": "2026-09-01T00:00:00+00:00"}
+    index = {"path": "inventory/catalog-001.md", "sha256": "business", "modified_at": "2026-10-01T00:00:00+00:00"}
+    old = snapshot(snapshot_id=1, files=[original, {**index, "sha256": "old-index"}])
+    current = snapshot(snapshot_id=2, files=[original, index], search_items=[{
+        "path": index["path"], "segments": [{"text": "- 年度报告.docx | 来源 docs/年度报告.docx | 修改日期 2026-09-01", "locator": "第5行"}],
+    }])
+    data = build_project_intelligence([current], [current, old], include_search_index=True)
+    assert data["summary"]["material_count"] == 1
+    assert data["summary"]["registered_file_count"] == 2
+    assert data["summary"]["inventory_file_count"] == 1
+    assert data["summary"]["series_count"] == 1
+    assert sum(data["summary"]["category_counts"].values()) == 1
+    assert not any(issue["type"] == "duplicate_content" for issue in data["health"]["issues"])
+    assert [item["path"] for item in data["recent_changes"]] == [original["path"]]
+    assert data["recent_changes_basis"] == "modified_time"
+    hit = search_project_intelligence(data, "年度报告")
+    assert hit["count"] == 1
+    assert hit["results"][0]["material"]["path"] == "docs/年度报告.docx"
+    assert hit["results"][0]["material"]["metadata_only"] is True
+
+
+def test_real_material_change_survives_inventory_regeneration():
+    path = "docs/requirements.md"
+    before = snapshot(snapshot_id=1, files=[{"path": path, "sha256": "v1"}])
+    after = snapshot(snapshot_id=2, files=[{"path": path, "sha256": "v2"}, {"path": "inventory/catalog-001.md", "sha256": "new"}])
+    result = build_project_intelligence([after], [after, before])
+    assert result["recent_changes_basis"] == "snapshot_diff"
+    assert [(item["path"], item["change_type"]) for item in result["recent_changes"]] == [(path, "modified")]

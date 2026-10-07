@@ -334,3 +334,13 @@ test('source navigation ignores a project change while loading', async () => {
   resolve(); await pending;
   assert.equal(searched,false);
 });
+
+test('dossier excludes generated inventory pages from evidence candidates', () => {
+  const {c} = intelligence(async()=>({}));
+  const facts=c.dossierFacts({materials:[
+    {path:'inventory/catalog-001.md',modified_at:'2026-10-07',facts:[{text:'Generated index summary'}]},
+    {path:'docs/report.md',modified_at:'2026-09-01',facts:[{text:'Original report evidence'}]},
+  ]});
+  assert.deepEqual(Array.from(facts,item=>item.text),['Original report evidence']);
+  assert.equal(c.changeLabel('recently_modified'),'资料修改日期');
+});

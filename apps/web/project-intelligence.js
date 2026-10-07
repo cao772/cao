@@ -103,6 +103,10 @@ function dossierSourceLink(source) {
   return escapeHtml(source);
 }
 
+function isInventoryMaterial(item) {
+  return item.generated_inventory === true || /^inventory\/(?:LOCAL_PROJECT_INVENTORY|catalog-\d{3})\.md$/.test(item.path || '');
+}
+
 function dossierFacts(data) {
   const facts = [];
   const seen = new Set();
@@ -116,7 +120,7 @@ function dossierFacts(data) {
     add({ text: intelligenceListText(fact), source: fact.source, date: data.context?.generated_at, observed: data.profile?.observed_at, label: '项目认知记录' });
   }
   const materials = [...(data.materials || [])]
-    .filter(item => !['historical', 'period_history'].includes(item.version_status))
+    .filter(item => !isInventoryMaterial(item) && !['historical', 'period_history'].includes(item.version_status))
     .sort((a, b) => String(b.modified_at || '').localeCompare(String(a.modified_at || '')));
   for (const material of materials) {
     for (const fact of (material.facts || []).slice(0, 2)) {
@@ -158,7 +162,7 @@ function renderDossier(data) {
   const decisions = (progress.decision_evidence || []).filter(item => item.text).slice(0, 3);
   const facts = dossierFacts(data);
   const materials = [...(data.materials || [])]
-    .filter(item => !['historical', 'period_history'].includes(item.version_status))
+    .filter(item => !isInventoryMaterial(item) && !['historical', 'period_history'].includes(item.version_status))
     .sort((a, b) => String(b.modified_at || '').localeCompare(String(a.modified_at || '')))
     .slice(0, 4);
   intelligenceEls.dossier.innerHTML = `
@@ -212,10 +216,11 @@ function renderIntelligenceSummary(data) {
   const summary = data.summary || {};
   const context = data.context || {};
   const cards = [
-    ['项目材料', summary.material_count || 0],
+    ['原材料记录', summary.material_count || 0],
     ['材料系列', summary.series_count || 0],
     ['多版本材料', summary.multi_version_series_count || 0],
     ['可搜正文', summary.search_indexed_file_count || 0],
+    ['目录索引页', summary.inventory_file_count ?? summary.inventory_index_file_count ?? 0],
     ['待确认问题', summary.health_issue_count || 0],
   ];
   intelligenceEls.summary.innerHTML = cards.map(([label, value]) => `
@@ -335,7 +340,7 @@ function changeLabel(type) {
     removed: '移除',
     modified: '修改',
     context_updated: '项目认知更新',
-    recently_modified: '近期修改',
+    recently_modified: '资料修改日期',
   }[type] || type || '变化';
 }
 
@@ -345,13 +350,13 @@ function renderRecentChanges(data) {
     intelligenceEls.changes.innerHTML = '<div class="intelligence-empty">暂无材料变化记录</div>';
     return;
   }
-  intelligenceEls.changes.innerHTML = `<div class="intelligence-list">${changes.slice(0, 30).map(item => `
+  intelligenceEls.changes.innerHTML = `${data.recent_changes_basis === 'modified_time' ? '<div class="dossier-field-source">未识别到连续快照中的材料变更；以下按文件修改日期列出，不代表近期新增进展。目录索引不参与此列表。</div>' : ''}<div class="intelligence-list">${changes.slice(0, 30).map(item => `
     <div class="intelligence-list-item">
       <div class="intelligence-list-main">
         <div class="intelligence-list-title"><strong>${escapeHtml(item.name || item.path || '材料变化')}</strong><span class="badge info">${escapeHtml(changeLabel(item.change_type))}</span></div>
         <div class="intelligence-list-path">${escapeHtml(item.path || '')}</div>
       </div>
-      <div class="intelligence-list-meta"><span>${escapeHtml(item.material_type_label || '')}</span><span>${escapeHtml(intelligenceDate(item.observed_at || item.modified_at))}</span></div>
+      <div class="intelligence-list-meta"><span>${escapeHtml(item.material_type_label || '')}</span><span>${escapeHtml(intelligenceDate(item.change_type === 'recently_modified' ? item.modified_at : item.observed_at || item.modified_at))}</span></div>
     </div>`).join('')}</div>`;
 }
 

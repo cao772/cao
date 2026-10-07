@@ -343,6 +343,8 @@ def _build_recent_changes(history_snapshots: list[dict[str, Any]], material_type
         previous_files = _snapshot_file_map(previous)
         observed_at = latest.get("observed_at")
         for path in sorted(set(latest_files) | set(previous_files)):
+            if _is_inventory_index(path):
+                continue
             before = previous_files.get(path)
             after = latest_files.get(path)
             if before is None and after is not None:
@@ -470,6 +472,7 @@ def build_project_intelligence(
                 "m1_series": m1_map.get(path),
                 "search_index_enabled": bool(search_item),
                 "metadata_only": _is_inventory_index(path) or (not analysis_item and not search_item),
+                "generated_inventory": _is_inventory_index(path),
             }
             if include_search_index:
                 variant["_search_segments"] = list(search_item.get("segments") or [])[:120]
@@ -489,7 +492,7 @@ def build_project_intelligence(
         hashes = {str(item.get("sha256")) for item in path_variants if item.get("sha256")}
         selected["workspace_variant_count"] = len(path_variants)
         selected["workspace_hash_count"] = len(hashes)
-        if len(hashes) > 1:
+        if len(hashes) > 1 and not _is_inventory_index(path):
             selected["workspace_divergent"] = True
             workspace_conflicts.append(
                 {
@@ -503,9 +506,10 @@ def build_project_intelligence(
             selected["workspace_divergent"] = False
         materials.append(selected)
 
+    project_materials = [item for item in materials if not item.get("generated_inventory")]
     material_by_path = {item["path"]: item for item in materials}
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for material in materials:
+    for material in project_materials:
         context_series_id = material.get("context_series_id")
         m1_series = material.get("m1_series") or all_m1.get(material["path"]) or {}
         if context_series_id:
@@ -593,8 +597,8 @@ def build_project_intelligence(
         )
 
     # Contract relationships are additive rather than version replacement.
-    contracts = [item for item in materials if item.get("material_type") == "contract"]
-    for item in materials:
+    contracts = [item for item in project_materials if item.get("material_type") == "contract"]
+    for item in project_materials:
         if item.get("material_type") == "contract_supplement" and contracts:
             same_parent = [candidate for candidate in contracts if candidate.get("parent") == item.get("parent")]
             target = (same_parent or contracts)[0]
@@ -606,7 +610,7 @@ def build_project_intelligence(
 
     # Exact hash duplicates are retained but marked, never deleted automatically.
     by_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for material in materials:
+    for material in project_materials:
         if material.get("sha256"):
             by_hash[str(material["sha256"])].append(material)
     duplicate_issues: list[dict[str, Any]] = []
@@ -625,7 +629,7 @@ def build_project_intelligence(
         for path in unique_paths[1:]:
             relations.append({"from": path, "to": canonical, "relation": "duplicate_of"})
 
-    category_counts = Counter(str(item.get("material_type") or "document") for item in materials)
+    category_counts = Counter(str(item.get("material_type") or "document") for item in project_materials)
     materials.sort(
         key=lambda item: (
             0 if item.get("version_status") in CURRENT_STATUSES else 1,
@@ -681,6 +685,7 @@ def build_project_intelligence(
 
     material_types = {item["path"]: str(item.get("material_type") or "document") for item in materials}
     recent_changes = _build_recent_changes(history_snapshots or [], material_types)
+    recent_changes_basis = "snapshot_diff" if recent_changes else "modified_time"
     if not recent_changes:
         recent_changes = [
             {
@@ -693,7 +698,7 @@ def build_project_intelligence(
                 "observed_at": item.get("observed_at"),
                 "workspace_name": item.get("workspace_name"),
             }
-            for item in sorted(materials, key=lambda entry: _dt_key(entry.get("modified_at")), reverse=True)[:20]
+            for item in sorted(project_materials, key=lambda entry: _dt_key(entry.get("modified_at")), reverse=True)[:20]
             if item.get("modified_at")
         ]
 
@@ -723,7 +728,9 @@ def build_project_intelligence(
             "important_files": important_files[:100],
         },
         "summary": {
-            "material_count": len(materials),
+            "material_count": len(project_materials),
+            "registered_file_count": len(materials),
+            "inventory_file_count": len(materials) - len(project_materials),
             "series_count": len(series_result),
             "multi_version_series_count": sum(1 for item in series_result if int(item.get("count") or 0) > 1),
             "search_indexed_file_count": search_enabled_count,
@@ -744,6 +751,7 @@ def build_project_intelligence(
         "series": series_result[:500],
         "relations": relations[:2000],
         "recent_changes": recent_changes[:80],
+        "recent_changes_basis": recent_changes_basis,
         "health": {
             "status": health_status,
             "issues": health_issues[:200],
