@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - cao
+      - codex/muse-codex-control
   pull_request:
     branches:
       - main
       - cao
+      - codex/superset-execution-plane
 
 jobs:
   test:

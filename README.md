@@ -301,3 +301,5 @@ curl http://localhost:8080/api/v1/projects/low-voltage/evidence
 4. 建项目总览、任务证据链、人员/Agent、时间线 Web 页面；
 5. SQLite MVP 升级 PostgreSQL + 统一 DevEvent 表；
 6. 生成日报、周报、风险与跨项目管理驾驶舱。
+
+P2 Muse/Codex 受控执行与反馈：[部署与权限说明](docs/P2-muse-codex-control.md)。
