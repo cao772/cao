@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
@@ -320,6 +320,101 @@ def completion(project_id: str) -> dict[str, Any]:
         raise HTTPException(422, "项目标识无效")
     return completion_judgement(project_id)
 
+
+
+
+def build_work_brief(*, mode: str = "return", limit: int = 3) -> dict[str, Any]:
+    """Current CAO evidence only. Never invent a time delta or formal completion."""
+    if mode not in {"return", "priority"} or not 1 <= limit <= 5:
+        raise ValueError("Unsupported work brief selection")
+    loops = collect_open_loops()
+    requiring_user = [item for item in loops if item["needs_user"]]
+    next_steps = [item for item in loops if item["type"] == "next_step"]
+    running = [item for item in loops if item["type"] == "execution_running"]
+    # Ongoing agents are monitor-only, never presented as work the user should execute.
+    selected = (requiring_user + next_steps + running)[:limit]
+    notes = {
+        "blocker": "需要确认项目阻塞及下一步责任人",
+        "next_step": "已记录的下一步，未验证今日截止时间",
+        "execution_running": "执行记录显示进行中，仅供观察，未验证 Host 实时状态",
+    }
+    priority_items = []
+    for item in selected:
+        status = str(item.get("execution_status") or "")
+        if item["type"] == "execution_needs_attention":
+            reason = (
+                "Codex 等待反馈，需人工确认"
+                if status == "waiting"
+                else "执行状态未确认，先核实，禁止自动重放"
+                if status == "unknown"
+                else "执行失败或受阻，先查看证据"
+            )
+        else:
+            reason = notes.get(item["type"], "请先核对原始项目记录")
+        priority_items.append(
+            {
+                "project_id": _compact(item["project_id"], 200),
+                "project_name": _compact(item["project_name"], 60),
+                "type": item["type"],
+                "text": _compact(item["text"], 100),
+                "source": item["source"],
+                "needs_user": bool(item["needs_user"]),
+                "execution_id": _compact(item.get("execution_id"), 80) or None,
+                "execution_status": _compact(item.get("execution_status"), 32) or None,
+                "priority_basis": reason,
+                "classification": (
+                    "needs_user"
+                    if item["needs_user"]
+                    else "suggested"
+                    if item["type"] == "next_step"
+                    else "monitor_only"
+                ),
+            }
+        )
+
+    if mode == "priority":
+        headline = (
+            "根据当前已记录事项，建议优先核对需要你处理的项目"
+            if requiring_user
+            else "当前没有已记录的紧急待处理项，可从下一步计划开始"
+            if next_steps
+            else "当前没有明确的人工优先任务，请核对数据是否更新"
+        )
+    else:
+        headline = (
+            f"当前记录有{len(requiring_user)}项需要你处理，另有{len(next_steps)}项下一步计划"
+            if loops
+            else "当前没有已记录的开放事项，不能据此认定所有项目完成"
+        )
+    return {
+        "mode": mode,
+        "headline": headline,
+        "needs_user_count": len(requiring_user),
+        "next_step_count": len(next_steps),
+        "running_count": len(running),
+        "items": priority_items,
+        "truncated": len(loops) > len(selected),
+        "snapshot_only": True,
+        "freshness_verified": False,
+        "changes_since_last_visit": None,
+        "comparison_available": False,
+        "formal_completion_inferred": False,
+        "auto_execute": False,
+    }
+
+
+@router.get("/work-brief")
+def work_brief(
+    request: Request,
+    mode: Literal["return", "priority"] = "return",
+    limit: int = Query(default=3, ge=1, le=5),
+    x_muse_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    # Personalized project status stays under the same loopback + Muse capability boundary.
+    from execution_p2 import personal_auth
+
+    personal_auth(request, x_muse_token)
+    return build_work_brief(mode=mode, limit=limit)
 
 @router.get("/summary")
 def summary(limit: int = Query(default=8, ge=1, le=30)) -> dict[str, Any]:
