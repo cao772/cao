@@ -39,3 +39,5 @@ Superset 原生 hook 事件不一定携带 definitionId，因此 guard 允许该
 第一次板端尝试未启动任务，不能判定验收通过。日志显示项目聚合查询超过 P1 的 5 秒超时；另外无活跃任务的模型问句误走普通聊天。Muse 已将执行启动的只读项目查询改用执行 client 的 60 秒上限，保留 P1 配置，并加入无活跃任务的明确模型答复及不含转录正文的 intent / route_result 诊断。此后发现本机 Host 已离线；恢复服务后旧会话保持 unknown，不重放。板端重新验收仍待完成。
 
 晚间交接：用户决定明天继续。板端同一 execution fd432f08-be0f-4f9d-9bd2-345fa75dc07b 实际收到反馈并加入 addition.py 与八项测试；总计 15 passed / 0 failed，独立 unittest 验证一致，测试仓库 HEAD 仍 fec4047，没有自动提交。用户确认首页 CODEX 状态。随后 Muse 增加 3 秒停顿录音，已烧录、140 tests passed，实机结束时机仍待确认。为降温关闭本轮开发 API 和语音模型，不自动恢复或重放。两边子分支尚未提交/推送/建 P2 Draft PR；明天先恢复本机配置及验证真实 Host 状态，余项详见 Muse project_context/p2-codex-control.md 的暂停交接。
+
+2026-10-08 已整合 ALL 4e08796 的 Personal Agent 只读摘要接口，保留 scoped execution API 独立认证与唯一授权测试仓库。整合后 Python 334 passed、前端 40 passed。Muse 同期整合 ALL bc1af1c，150 passed；手机热点下真机 Wi-Fi / 鉴权 hello / 三次 pong 已恢复，3 秒停顿版收到完整 13.2 秒录音，但整合后的语音执行仍待验收。本 PR 保持 Draft，不将运行时未知或 task.finished 解释为正式项目完成。

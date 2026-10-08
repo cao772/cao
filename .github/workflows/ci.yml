@@ -10,6 +10,7 @@ on:
       - main
       - cao
       - codex/superset-execution-plane
+      - codex/personal-agent-all
 
 jobs:
   test:
