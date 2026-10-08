@@ -5,6 +5,7 @@ on:
     branches:
       - cao
       - codex/muse-codex-control
+      - feature/p3-attention-feed
   pull_request:
     branches:
       - main

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import main
 
@@ -19,10 +20,13 @@ ACTIVE_STATUSES = {
     "creating_workspace",
     "starting_agent",
     "agent_started",
+    "running",
 }
 NEEDS_USER_EXECUTION_STATUSES = {
     "blocked_compatibility",
     "unknown",
+    "waiting",
+    "failed",
 }
 
 
@@ -77,7 +81,9 @@ def _safe_execution(item: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "runtime_status": runtime,
         "formal_completion": bool(item.get("formal_completion", False)),
-        "needs_user": status in NEEDS_USER_EXECUTION_STATUSES,
+        "needs_user": (
+            status in NEEDS_USER_EXECUTION_STATUSES or bool(item.get("needs_user"))
+        ) and status != "finished",
         "updated_at": _compact(item.get("updated_at"), 80) or None,
     }
 
@@ -147,7 +153,7 @@ def collect_open_loops() -> list[dict[str, Any]]:
         status = str(execution["status"])
         if status not in ACTIVE_STATUSES | NEEDS_USER_EXECUTION_STATUSES:
             continue
-        if status in NEEDS_USER_EXECUTION_STATUSES:
+        if execution["needs_user"]:
             priority = 95
             loop_type = "execution_needs_attention"
         else:
@@ -167,12 +173,17 @@ def collect_open_loops() -> list[dict[str, Any]]:
             loops.append(item)
 
     deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for item in sorted(
         loops,
         key=lambda value: (-int(value["priority"]), str(value["project_name"]), str(value["text"])),
     ):
-        key = (str(item["project_id"]), str(item["type"]), str(item["text"]))
+        key = (
+            str(item["project_id"]),
+            str(item["type"]),
+            str(item["text"]),
+            str(item.get("execution_id") or ""),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -248,6 +259,60 @@ def open_loops(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
         "truncated": len(loops) > len(selected),
     }
 
+
+
+
+@router.get("/attention")
+def attention(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=50),
+    x_muse_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    # This new feed is sensitive; require the scoped Muse capability.
+    from execution_p2 import personal_auth
+
+    personal_auth(request, x_muse_token)
+    return attention_snapshot(limit)
+
+
+def attention_snapshot(limit: int = 20) -> dict[str, Any]:
+    """Read-only current-state feed; not a push or delivery guarantee.
+
+    Clients can deduplicate unresolved items using a stable ID.
+    Cleared items disappear from the next snapshot.
+    """
+    urgent = [item for item in collect_open_loops() if item["needs_user"]]
+    selected = []
+    for item in urgent[:limit]:
+        fingerprint = json.dumps(
+            [
+                item["project_id"],
+                item["type"],
+                item.get("execution_id"),
+                item.get("execution_status"),
+                item["text"],
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        selected.append(
+            {
+                **item,
+                "item_id": hashlib.sha256(fingerprint.encode()).hexdigest()[:24],
+                "severity": (
+                    "critical"
+                    if item["type"] in {"blocker", "execution_needs_attention"}
+                    else "action"
+                ),
+            }
+        )
+    return {
+        "count": len(urgent),
+        "items": selected,
+        "truncated": len(urgent) > len(selected),
+        "snapshot_only": True,
+        "auto_interrupt": False,
+    }
 
 @router.get("/completion/{project_id}")
 def completion(project_id: str) -> dict[str, Any]:
