@@ -66,7 +66,7 @@ def test_summary_stays_quiet_for_normal_next_steps(monkeypatch):
     )
     monkeypatch.setattr(personal, "_execution_rows", lambda limit=100: [])
 
-    result = personal.summary()
+    result = personal.summary(limit=8)
     assert result["attention_required"] is False
     assert result["needs_user_count"] == 0
     assert result["headline"] == "当前没有需要立即打断你的事项"
