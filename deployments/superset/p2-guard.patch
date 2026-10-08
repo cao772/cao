@@ -1,0 +1,37 @@
+--- a/packages/host-service/src/trpc/router/terminal/terminal.ts
++++ b/packages/host-service/src/trpc/router/terminal/terminal.ts
+@@ -178,6 +178,34 @@
+ 	// Send a follow-up message into an already-running terminal (e.g. a
+ 	// claude/codex agent) instead of spawning a new session. Multi-line text
+ 	// is framed as a bracketed paste server-side.
++	p2Capabilities: protectedProcedure.query(() => ({ guardedAgentSend: 2 })),
++	// P2 never falls back to a shell, creates a terminal, or resumes an agent.
++	sendAgent: protectedProcedure
++		.input(z.object({
++			terminalId: z.string(), workspaceId: z.string(),
++			agentSessionId: z.string().min(1), definitionId: z.string().min(1).nullable(),
++			text: z.string().min(1).max(4000),
++		}))
++		.mutation(async ({ ctx, input }) => {
++			const binding = ctx.terminalAgentStore.get(input.terminalId);
++			if (!binding || binding.endedAt !== undefined ||
++				binding.agentId !== "codex" ||
++				(binding.definitionId ?? null) !== input.definitionId ||
++				binding.workspaceId !== input.workspaceId ||
++				binding.agentSessionId !== input.agentSessionId) {
++				throw new Error("P2 agent binding mismatch");
++			}
++			const result = await sendAgentMessage({
++				terminalId: input.terminalId, workspaceId: input.workspaceId,
++				text: input.text, submit: true, db: ctx.db,
++				eventBus: ctx.eventBus,
++				terminalAgentStore: ctx.terminalAgentStore,
++				expectedAgent: binding,
++			});
++			if ("error" in result) throw toTerminalSessionError(result);
++			return { submitted: true };
++		}),
++
+ 	send: protectedProcedure
+ 		.input(
+ 			z

@@ -6,10 +6,11 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import main
 
@@ -20,6 +21,7 @@ SUPPORTED_SOURCE_REVISION = "9a50076c324b3d2575762e5bdcba6838061c8be5"
 
 
 class Launch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     request_id: UUID
     project_id: str = Field(min_length=1, max_length=200)
     repository_id: str = Field(min_length=1, max_length=200)
@@ -27,6 +29,8 @@ class Launch(BaseModel):
     task_title: str = Field(min_length=1, max_length=200)
     agent: str = Field(default="codex", pattern="^codex$")
     prompt: str = Field(default="", max_length=12000)
+    model_profile: Literal["fast", "balanced", "strong"] | None = None
+    reasoning_effort: Literal["low", "medium", "high"] = "medium"
 
 
 def settings() -> dict:
@@ -125,7 +129,15 @@ def runs(x_collector_token: str | None = Header(default=None)):
 
 @router.post("/runs")
 def launch(payload: Launch, x_collector_token: str | None = Header(default=None)):
+    return launch_execution(payload, x_collector_token)
+
+
+def launch_execution(payload: Launch, x_collector_token: str | None, *, muse_capability: str | None = None):
     authorize(x_collector_token)
+    if payload.model_profile:
+        from execution_p2 import check_scope, check_task
+        check_scope(payload.prompt)
+        check_task(payload.prompt)
     config = settings()
     binding = next((item for item in config.get("bindings", [])
                     if item["project_id"] == payload.project_id
@@ -137,7 +149,8 @@ def launch(payload: Launch, x_collector_token: str | None = Header(default=None)
                      provider_instance=config.get("organization_id", config["url"]),
                      workspace_id=str(payload.request_id), session_id=None,
                      status="creating_workspace", created_at=main.now_utc(),
-                     updated_at=main.now_utc(), formal_completion=False)
+                     updated_at=main.now_utc(), formal_completion=False, p2=bool(payload.model_profile))
+    execution["muse_capability"] = muse_capability
     with db() as connection:
         try:
             connection.execute("INSERT INTO executions VALUES (?,?,?)",
@@ -146,10 +159,17 @@ def launch(payload: Launch, x_collector_token: str | None = Header(default=None)
         except sqlite3.IntegrityError:
             row = connection.execute("SELECT request_json,result_json FROM executions WHERE id=?",
                                      (execution["id"],)).fetchone()
-            if json.loads(row[0]) != request:
+            if json.loads(row[0]) != request or json.loads(row[1]).get("muse_capability") != muse_capability:
                 raise HTTPException(409, "同一请求 ID 不能用于不同任务") from None
             return json.loads(row[1])
         try:
+            selection = {}
+            if payload.model_profile:
+                from execution_p2 import resolve_profile
+                selection = resolve_profile(config, payload.model_profile, payload.reasoning_effort)
+                execution.update(selection["display"])
+                from execution_p2 import POLICY
+                launch_prompt = POLICY + f"\nproject_id={payload.project_id}; task_id={payload.task_id}; report session_id={execution['id']}\n" + payload.prompt
             result = call(config, "workspaces.create", {
                 "id": execution["id"], "projectId": binding["superset_project_id"],
                 "checkout": "worktree", "branch": "codex/cao-" + execution["id"],
@@ -162,11 +182,15 @@ def launch(payload: Launch, x_collector_token: str | None = Header(default=None)
             save(connection, execution)
             call(config, "settings.agentConfigs.list")
             result = call(config, "agents.run", {
-                "workspaceId": execution["workspace_id"], "agent": payload.agent,
-                "prompt": payload.prompt, "surface": "terminal",
+                "workspaceId": execution["workspace_id"], "agent": selection.get("agent", payload.agent),
+                "prompt": launch_prompt if payload.model_profile else payload.prompt, "surface": "terminal",
+                **selection.get("launch", {}),
             }, mutation=True)
             execution["session_id"] = result["sessionId"]
             execution["status"] = "agent_started"
+            if payload.model_profile:
+                execution["p2"] = True
+                execution["agent_definition_id"] = selection["agent"]
         except HTTPException as error:
             execution["status"] = "blocked_compatibility" if error.status_code == 503 else "unknown"
             execution["diagnostic"] = (error.detail if error.status_code == 503 else
@@ -201,6 +225,9 @@ def inspect(execution_id: UUID, x_collector_token: str | None = Header(default=N
             "running" if session and not session.get("exited") else
             "exited" if session else "not_observed"
         )
+        if execution.get("p2"):
+            from execution_p2 import observe
+            observe(config, execution)
         execution["updated_at"] = main.now_utc()
         save(connection, execution)
     return execution

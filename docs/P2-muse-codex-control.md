@@ -1,0 +1,79 @@
+# P2 Muse → CAO → Superset → Codex
+
+基于 M9 `d377005` 的独立子分支。保留 M9 执行接口、鉴权、请求幂等和 Evidence Fusion；新增受控 profile、真实会话状态、反馈和独立 Muse capability。没有合并正式 cao 或改写 M9 历史。
+
+## 本机模型探测
+
+2026-10-07 使用应用自带 Codex app-server 的 initialize / model/list 实际查询，得到 gpt-6-luna、gpt-6.1-sol、gpt-6-astra 等，均支持 low / medium / high。固定 Superset 源码的 curated catalog 同样包含这三个模型。配置映射 fast=gpt-6-luna，balanced=gpt-6.1-sol，strong=gpt-6-astra；这是本机已验证配置，账户/Host 变化需要重新探测，不能猜测其他账户可用性。
+
+CAO_SUPERSET_CONFIG 在已有 manifest/bindings 之外增加 model_profiles 和 p2_agent_id。p2_agent_id 指向独立 Codex preset（presetId=codex），args 必须严格等于 `apps/server/p2_policy.py` 中的 P2_ARGS：workspace-write、never、禁网络、无额外写目录；只启用并批准 cao-sentinel 的四个执行事件报告工具（report_task_started / progress / test_result / finished），启动前验证有效 MCP 配置和完整 MCP 工具集，整体关闭插件和 Apps，另行核对模型可见的内置工具集，argv prompt，不能借用旧 --yolo 或 bypass 配置。模型名只由本地管理员配置，API 请求只接受 profile 白名单与三档 effort。实际解析模型写入 execution 展示记录。已有会话暂不热切换模型，Muse 设置作用于下一项任务，避免虚假声称已切换。
+
+## 保护接口
+
+官方 terminal.send 在 Agent 结束时会回退为 shell 输入；agents.run 的 continue 也可能改为新启动。P2 不调用这些反馈路径。`deployments/superset/p2-guard.patch` 为固定源码添加 `terminal.p2Capabilities` 与 `terminal.sendAgent`：校验 workspace、terminal、definition、Codex harness session，调用原 sendAgentMessage，其串行发送链再次检查绑定存活；无 shell 回退、无新建/恢复会话。
+
+先运行 `python3 deployments/superset/install_p2_guard.py ~/Downloads/superset-local`，再重建并重启本机 Host。安装器校验固定 HEAD 和 patch，不覆盖已有修改。CAO 在启动前探测能力；没有补丁时拒绝 P2。Host 仍版本1.36.0，补丁不冒充上游公共 API 或运行源码 SHA 证明。
+
+workspace-write + never + network_access=false + writable_roots=[] 是运行时限制，禁止自动危险命令批准；额外 scope 指令明确禁止 commit/push/merge/deploy/删除仓库或分支/业务数据库写入/正式分支修改。不请求自动越权审批；网络命令/额外写目录和.git写入受sandbox限制。needs_user表示会话等待反馈，Muse不审批。提示词不是完整安全沙箱；不承诺防御同用户权限的恶意 Host、恶意 preset 或人工批准的违规操作。P2 首轮只授权专用测试仓库绑定。Docker Desktop桥接请求必须显式配置CAO_MUSE_BRIDGE_CLIENT，Host端口仍只能发布127.0.0.1，不允许任意私网来源。
+
+## 两种凭据与接口
+
+内部 M9 继续 X-Collector-Token。Muse **不持有该令牌或 Host PSK**。设置一个不同的 CAO_MUSE_TOKEN；Muse 使用 X-Muse-Token，仅可调用 loopback 上 `/api/v1/personal/execution` 的 provider、POST runs、GET runs/{uuid}、POST runs/{uuid}/feedback。只公开 `personal_enabled=true` 的 bindings，不返回 Host配置、环境、prompt、workspace路径、原始terminal、完整会话。scope不能调用项目写接口或任意RPC。反向代理不得为该接口放行非本机客户端。
+
+POST runs 保留 M9 请求字段，增加 model_profile 与 reasoning_effort。Muse task_id 固定派生为 P2-{request_id}，避免复用业务任务。相同 UUID+同内容不启动第二次，同 UUID不同内容409；失败记录不盲重放。结果状态规范化 starting/running/waiting/finished/failed/unknown（queued保留协议词）。agent Stop 是 waiting；Agent/terminal退出是执行进程结束，formal_completion永远false。
+
+反馈包含 request_id UUID、text最长2000字，目标只允许现有execution_id。核对当前Host和绑定后，先持久化unknown，再发送一次。反馈表只保存UUID、execution、内容SHA256、状态、时间，绝不存正文。相同反馈ID不同内容409；超时unknown不重放；finished/unknown不可反馈，也不自动重启。
+
+测试计数只从中央真实 test.result 事件读取，project_id、唯一 task_id、report session_id=execution_id 必须一致。该 report session_id 是事件关联ID，另有 agent_session_id 表示真实Codex harness、session_id表示Superset terminal。不能把三者混为一谈。无真实事件返回null，不解析 DONE 文本或推测测试数。正式完成规则完全未改。
+
+## 验证记录
+
+开发期间只做单元/静态检查；两端完成后统一本机和板端验收。最终实际记录补于本节，未验证部分不得提前标通过。
+
+### 2026-10-07 本机实测及板端问题复核
+
+受限 fast / gpt-6-luna / low 会话 `34388558-2bb0-4f63-b21d-faddaa1272fd` 实际生成 multiply.py 和 unittest。相同会话收到一次反馈后加入严格整数参数验证；相同反馈 request_id 再请求只返回 sent 元数据，没有第二次发送。中央事件报告 7 passed / 0 failed，独立运行 unittest 同样 7 passed。测试仓库 HEAD 保持 fec4047，两个代码文件未提交。
+
+Superset 原生 hook 事件不一定携带 definitionId，因此 guard 允许该字段为空，但必须匹配 workspace、terminal、Codex harness session 与活跃绑定；首次获取 harness 后固定绑定，替换会话返回 unknown。能力探测版本为 guardedAgentSend=2。已逐条审阅并信任固定版本的九个本机通知 hook，没有使用 bypass-hook-trust。仅允许四个事件工具的批准配置使实际事件可以上报，不开放业务写入工具。
+
+第一次板端尝试未启动任务，不能判定验收通过。日志显示项目聚合查询超过 P1 的 5 秒超时；另外无活跃任务的模型问句误走普通聊天。Muse 已将执行启动的只读项目查询改用执行 client 的 60 秒上限，保留 P1 配置，并加入无活跃任务的明确模型答复及不含转录正文的 intent / route_result 诊断。此后发现本机 Host 已离线；恢复服务后旧会话保持 unknown，不重放。板端重新验收仍待完成。
+
+晚间交接：用户决定明天继续。板端同一 execution fd432f08-be0f-4f9d-9bd2-345fa75dc07b 实际收到反馈并加入 addition.py 与八项测试；总计 15 passed / 0 failed，独立 unittest 验证一致，测试仓库 HEAD 仍 fec4047，没有自动提交。用户确认首页 CODEX 状态。随后 Muse 增加 3 秒停顿录音，已烧录、140 tests passed，实机结束时机仍待确认。为降温关闭本轮开发 API 和语音模型，不自动恢复或重放。两边子分支尚未提交/推送/建 P2 Draft PR；明天先恢复本机配置及验证真实 Host 状态，余项详见 Muse project_context/p2-codex-control.md 的暂停交接。
+
+2026-10-08 已整合 ALL 4e08796 的 Personal Agent 只读摘要接口，保留 scoped execution API 独立认证与唯一授权测试仓库。整合后 Python 334 passed、前端 40 passed。Muse 同期整合 ALL bc1af1c，150 passed；手机热点下真机 Wi-Fi / 鉴权 hello / 三次 pong 已恢复，3 秒停顿版收到完整 13.2 秒录音，但整合后的语音执行仍待验收。本 PR 保持 Draft，不将运行时未知或 task.finished 解释为正式项目完成。
+
+
+## 2026-10-08 整合后本机执行验收
+
+Muse PR #3 (`bc1af1c`) 与 CAO PR #30 (`4e08796`) 已整合到两个 P2 子分支；没有合并正式分支。P2 Draft PR 为 Muse #5 / CAO #31。整合后的 Gateway、firmware 及 CAO CI 已全部通过：Muse 150 项、CAO 334 项 Python / 40 项前端测试。
+
+通过实际 Muse 执行路由启动专用测试仓库任务 `5dc29cbe-f19c-453a-811b-638d7bcd75cf`，解析模型为 fast / gpt-6-luna / low。启动响应 4.611 秒，模型与推理查询约 0.02 秒；启动后首次查询仍可能暂时 Unknown，随后真实报告转为 Waiting。新增减法函数与 4 项测试；同一会话追加整数类型约束后 6 项通过；继续执行并补边界后 9 项通过。测试查询返回实际 9 passed / 0 failed；独立 `python3 -m unittest -v` 复验一致，测试仓库 HEAD 仍 `fec4047`，只有两个未跟踪实现/测试文件，没有自动 Git 提交。Waiting 表示等待下一步，formal_completion 仍 false。
+
+本次 Superset Host 离线原因是开发版监听启动父进程：临时启动命令结束后 Host 自动退出。现以独立常驻父进程等待 Electron 子进程结束，保留原开发数据目录与受控补丁；没有修改上游退出策略，也没有重新启动先前高占用的开发 API。Gateway / Voice 以独立会话启动，日志只在本机临时目录。Mac 睡眠、断电或退出这些服务后，仍需重新核验 Host 与设备 RAM 配置，不自动重放任务。
+
+3 秒连续静音录音已实测 13.2 秒 / 844800 字节，USB 完整校验并回 Ready；用户随后确认“这个没问题”。该轻量接收验证没有加载模型或执行开发任务。整合后的新版板端语音开发闭环正在统一验收，未提前标为通过。
+
+
+### 整合后新版板端验收
+
+用户确认“OK我测试没问题”。截至本次收口，日志实际记录四轮：语音启动、进度查询、追加反馈、模型/推理查询；四轮均 handled、由 CAO 返回，完成后恢复 Ready，未出现第二个执行 UUID。任务为 `3f42f9a4-8394-4a57-8388-9c19dc23ec43`，fast / gpt-6-luna / medium；语音只指定快模型，因此 effort 保持默认 medium，没有冒称 low。板端连续安静 3 秒结束及首页 CODEX 状态由用户确认正常。
+
+同一执行收到整数参数反馈后，实际实现 square 并拒绝 bool/非整数，中央报告 5 passed / 0 failed，独立 unittest 同样 5 项通过（包含仓库本轮添加的标题处理测试）。测试仓库 HEAD 仍 fec4047，没有自动提交。语音继续执行和测试结果播报未在这四轮日志中出现，不冒称完成六轮；对应接口流程已在上节真实本机 9 项测试闭环验证，保留为板端覆盖限制。
+
+四轮 STT 为 0.494–0.645 秒。按键至首音分别 27.985 / 14.533 / 15.310 / 13.097 秒，包含录音、3 秒静音等待和 USB 导出；USB 接收完成至首音分别 11.969 / 6.454 / 3.839 / 4.398 秒。进度回答分五段播放约 17.8 秒，仍有精简播报空间；本轮未追加延迟优化功能。启动初期绑定尚未建立可短暂显示 Unknown，后续实际 Running / Waiting；不把 Waiting 当正式完成。
+
+
+## 2026-10-08 Review 修订
+
+查询/反馈每次校验当前 personal_enabled 的项目+仓库配对，以及服务端记录的 Muse capability SHA-256 归属。内部 M9/P2 执行、旧版无归属记录、撤销配对及更换 capability 的记录均拒绝；不迁移旧会话或自动重放。发送反馈前再次核对授权与受限 preset。新策略标记 tool_policy_version=2，旧策略不能继续反馈。
+
+受控 preset 的 command 必须等于管理员配置的 p2_guarded_command。安装 `python3 deployments/superset/install_p2_codex.py PRIVATE_DIR --binary ABSOLUTE_CODEX_CLI` 后，将该目录中的 codex 绝对路径同时配置到 preset 和 p2_guarded_command。安装只写专用目录，不修改用户 Codex 配置。每次启动必须完整匹配 P2_ARGS，仅允许 Superset 追加 model/effort 和单个任务 prompt。
+
+新启动器先用本机 CLI 向 loopback 模拟 Responses 服务发送一次工具清单请求：无模型推理，不发送到云端，不保存请求正文，仅提取外层工具和 code-mode 描述中的嵌套工具名。工具清单、压缩格式、模型缓存或接口未知即拒绝。批准的内置工具为 exec/wait、受沙箱限制的 apply_patch/exec_command/write_stdin/view_image、目标管理、有限 MCP resource 查询、用户输入及 clock；完整集合在 p2_builtin_audit.ALLOWED。它们是代码执行基础工具，不能说“总共只有四个工具”。此外，app-server config/read 校验当前工作目录的有效配置，未知启用 MCP 在工具初始化前拒绝；mcpServerStatus/list 分页全集必须严格等于四个报告工具。整体禁用 plugins/remote_plugin/apps/web，agents.enabled=false 关闭模型 metadata 驱动的 v2 协作工具；仅 features.multi_agent=false 在本机版本不够。禁用共享 daemon 并移除父桌面 CODEX_* session/permission/API-key 环境覆盖。
+
+本机实际 MCP 工具全集为 cao-sentinel/report_task_started、report_task_progress、report_test_result、report_task_finished。实际 RPC 尝试 get_project_context、node_repl/js、未知 server/write 均拒绝；注入新 MCP server 使启动预检拒绝。实际模型请求不再包含 collaboration/spawn_agent/send_message 等工具；清单只含上述批准内置工具。源码/配置被同用户恶意修改不属于该保证；不扩大到业务仓库。
+
+P2 独立 POST/runs 现在拒绝空白、启动口令及缺少操作的任务（中文/英文代码动作白名单是输入保护，不是完整语义理解）。原始启动 prompt，包括从语音转录得到的任务文本，会保存在 CAO executions.request_json 与 result_json，以及真实 Codex 会话/argv 中；它不是录音文件，但仍属敏感任务内容。反馈正文只发送到已有 Codex 会话，CAO execution_feedback 表仅存哈希/元数据；Codex 自身会话记录可能保留反馈。Muse 不保存录音/转录日志的口径不能等同于“整个系统不持久化任务文本”。当前没有自动保留期清理，应仅对授权测试内容使用，清理由操作者按数据保留策略执行。
+
+
+修订后的最终策略真机 Host 本机闭环：execution `0770a3b2-0b79-4c4c-8286-8b28e8b70be8`，fast / gpt-6-luna / low；实际同一 harness 启动 3 tests → 整数约束反馈 6 tests → 继续执行补边界 10 tests。中央 test.result 与独立 unittest 均 10 passed / 0 failed，fixture HEAD 仍 fec4047，无自动提交。受限启动器的模型可见内置工具审计与 MCP 清单检查均实际通过。新增源码回归最终为 361 Python / 40 前端测试；没有重新做板端六轮验收。
