@@ -41,3 +41,14 @@ Superset 原生 hook 事件不一定携带 definitionId，因此 guard 允许该
 晚间交接：用户决定明天继续。板端同一 execution fd432f08-be0f-4f9d-9bd2-345fa75dc07b 实际收到反馈并加入 addition.py 与八项测试；总计 15 passed / 0 failed，独立 unittest 验证一致，测试仓库 HEAD 仍 fec4047，没有自动提交。用户确认首页 CODEX 状态。随后 Muse 增加 3 秒停顿录音，已烧录、140 tests passed，实机结束时机仍待确认。为降温关闭本轮开发 API 和语音模型，不自动恢复或重放。两边子分支尚未提交/推送/建 P2 Draft PR；明天先恢复本机配置及验证真实 Host 状态，余项详见 Muse project_context/p2-codex-control.md 的暂停交接。
 
 2026-10-08 已整合 ALL 4e08796 的 Personal Agent 只读摘要接口，保留 scoped execution API 独立认证与唯一授权测试仓库。整合后 Python 334 passed、前端 40 passed。Muse 同期整合 ALL bc1af1c，150 passed；手机热点下真机 Wi-Fi / 鉴权 hello / 三次 pong 已恢复，3 秒停顿版收到完整 13.2 秒录音，但整合后的语音执行仍待验收。本 PR 保持 Draft，不将运行时未知或 task.finished 解释为正式项目完成。
+
+
+## 2026-10-08 整合后本机执行验收
+
+Muse PR #3 (`bc1af1c`) 与 CAO PR #30 (`4e08796`) 已整合到两个 P2 子分支；没有合并正式分支。P2 Draft PR 为 Muse #5 / CAO #31。整合后的 Gateway、firmware 及 CAO CI 已全部通过：Muse 150 项、CAO 334 项 Python / 40 项前端测试。
+
+通过实际 Muse 执行路由启动专用测试仓库任务 `5dc29cbe-f19c-453a-811b-638d7bcd75cf`，解析模型为 fast / gpt-6-luna / low。启动响应 4.611 秒，模型与推理查询约 0.02 秒；启动后首次查询仍可能暂时 Unknown，随后真实报告转为 Waiting。新增减法函数与 4 项测试；同一会话追加整数类型约束后 6 项通过；继续执行并补边界后 9 项通过。测试查询返回实际 9 passed / 0 failed；独立 `python3 -m unittest -v` 复验一致，测试仓库 HEAD 仍 `fec4047`，只有两个未跟踪实现/测试文件，没有自动 Git 提交。Waiting 表示等待下一步，formal_completion 仍 false。
+
+本次 Superset Host 离线原因是开发版监听启动父进程：临时启动命令结束后 Host 自动退出。现以独立常驻父进程等待 Electron 子进程结束，保留原开发数据目录与受控补丁；没有修改上游退出策略，也没有重新启动先前高占用的开发 API。Gateway / Voice 以独立会话启动，日志只在本机临时目录。Mac 睡眠、断电或退出这些服务后，仍需重新核验 Host 与设备 RAM 配置，不自动重放任务。
+
+3 秒连续静音录音已实测 13.2 秒 / 844800 字节，USB 完整校验并回 Ready；用户随后确认“这个没问题”。该轻量接收验证没有加载模型或执行开发任务。整合后的新版板端语音开发闭环正在统一验收，未提前标为通过。
