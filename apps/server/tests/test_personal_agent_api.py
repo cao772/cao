@@ -168,8 +168,8 @@ def test_p3_attention_understands_live_p2_statuses(monkeypatch):
     assert result["active_execution_count"] == 1
     assert result["headline"] == "有1项需要你处理"
 
-    first = personal.attention(limit=20)
-    second = personal.attention(limit=20)
+    first = personal.attention_snapshot(limit=20)
+    second = personal.attention_snapshot(limit=20)
     assert first == second
     assert first["count"] == 1
     assert first["items"][0]["execution_id"] == "run-wait"
@@ -197,7 +197,7 @@ def test_p3_distinct_executions_same_title_not_deduplicated(monkeypatch):
             {"id": "b", "project_id": "p", "task_title": "重复任务", "status": "failed"},
         ],
     )
-    result = personal.attention(limit=20)
+    result = personal.attention_snapshot(limit=20)
     assert result["count"] == 2
     assert len({row["item_id"] for row in result["items"]}) == 2
     assert all(row["severity"] == "critical" for row in result["items"])
@@ -221,6 +221,41 @@ def test_p3_attention_feed_stays_quiet_for_noncritical_progress(monkeypatch):
             {"id": "a", "project_id": "p", "task_title": "正常运行", "status": "running"}
         ],
     )
-    result = personal.attention(limit=20)
+    result = personal.attention_snapshot(limit=20)
     assert result["count"] == 0
     assert not result["items"]
+
+
+def test_p3_attention_http_requires_scoped_muse_capability(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(personal.router)
+    monkeypatch.setenv("CAO_MUSE_TOKEN", "private-muse-test-token")
+    monkeypatch.setattr(
+        personal,
+        "_projects",
+        lambda: [{"project_id": "p", "project_name": "P", "last_seen_at": "today"}],
+    )
+    monkeypatch.setattr(
+        personal.main,
+        "project_brief",
+        lambda project_id: {"issues": ["有待处理问题"], "next_steps": []},
+    )
+    monkeypatch.setattr(personal, "_execution_rows", lambda limit=100: [])
+    with TestClient(app) as client:
+        assert client.get("/api/v1/personal-agent/attention").status_code == 401
+        assert (
+            client.get(
+                "/api/v1/personal-agent/attention",
+                headers={"X-Muse-Token": "incorrect"},
+            ).status_code
+            == 401
+        )
+        allowed = client.get(
+            "/api/v1/personal-agent/attention",
+            headers={"X-Muse-Token": "private-muse-test-token"},
+        )
+        assert allowed.status_code == 200
+        assert allowed.json()["count"] == 1
