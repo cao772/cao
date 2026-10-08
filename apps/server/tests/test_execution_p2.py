@@ -20,6 +20,7 @@ def config_p2(path):
             "strong": "verified-strong",
         },
         p2_agent_id="safe-agent",
+        p2_guarded_command="/safe/codex",
     )
     config["bindings"][0]["personal_enabled"] = True
     path.write_text(json.dumps(config))
@@ -80,7 +81,11 @@ def launch_p2(configured, monkeypatch, **kwargs):
     config_p2(configured)
     calls = host_calls(monkeypatch, **kwargs)
     payload = request().model_copy(
-        update={"model_profile": "strong", "reasoning_effort": "high"}
+        update={
+            "model_profile": "strong",
+            "reasoning_effort": "high",
+            "prompt": "实现加法并运行测试",
+        }
     )
     result = ep.launch(payload, "test-access")
     return payload, result, calls
@@ -118,7 +123,9 @@ def test_unsafe_preset_never_creates_worktree(configured, monkeypatch):
         ]
 
     monkeypatch.setattr(ep, "call", call)
-    payload = request().model_copy(update={"model_profile": "fast"})
+    payload = request().model_copy(
+        update={"model_profile": "fast", "prompt": "实现加法并运行测试"}
+    )
     result = ep.launch(payload, "test-access")
     assert result["status"] == "blocked_compatibility"
     assert "workspaces.create" not in calls
@@ -220,6 +227,7 @@ def test_muse_capability_is_separate_scoped_and_sanitized(configured, monkeypatc
         assert "superset_project_id" not in response.text
         body = request().model_dump(mode="json")
         body["model_profile"] = "balanced"
+        body["prompt"] = "实现加法并运行测试"
         response = client.post(
             "/api/v1/personal/execution/runs",
             headers={"X-Muse-Token": "muse-only"},
@@ -294,3 +302,114 @@ def test_only_explicit_bridge_client_is_allowed(configured, monkeypatch):
     request = Request({"type": "http", "client": ("172.22.0.99", 1234), "headers": []})
     with pytest.raises(ep.HTTPException):
         p2.personal_auth(request, "muse-only")
+
+
+@pytest.mark.parametrize("prompt", ["", "   ", "开始开发", "启动 Codex", "测试项目"])
+def test_blank_or_operationless_task_rejected_before_host(
+    configured, monkeypatch, prompt
+):
+    config_p2(configured)
+    calls = host_calls(monkeypatch)
+    payload = request().model_copy(update={"model_profile": "fast", "prompt": prompt})
+    with pytest.raises(ep.HTTPException) as exc:
+        ep.launch(payload, "test-access")
+    assert exc.value.status_code == 422 and not calls
+
+
+def muse_client(monkeypatch):
+    monkeypatch.setenv("CAO_MUSE_TOKEN", "muse-only")
+    app = FastAPI()
+    app.include_router(p2.router)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    "change", ["different_repo", "revoked", "internal_origin", "rotated_capability"]
+)
+def test_muse_inspect_and_feedback_recheck_pair_and_origin(
+    configured, monkeypatch, change
+):
+    config_p2(configured)
+    calls = host_calls(monkeypatch)
+    payload = request().model_copy(
+        update={"model_profile": "fast", "prompt": "实现加法并运行测试"}
+    )
+    headers = {"X-Muse-Token": "muse-only"}
+    with muse_client(monkeypatch) as client:
+        if change == "internal_origin":
+            ep.launch(payload, "test-access")
+        else:
+            assert (
+                client.post(
+                    "/api/v1/personal/execution/runs",
+                    headers=headers,
+                    json=payload.model_dump(mode="json"),
+                ).status_code
+                == 200
+            )
+        config = json.loads(configured.read_text())
+        if change == "different_repo":
+            config["bindings"][0]["personal_enabled"] = False
+            config["bindings"].append(
+                {
+                    **config["bindings"][0],
+                    "repository_id": "repo-b",
+                    "personal_enabled": True,
+                }
+            )
+        if change == "revoked":
+            config["bindings"][0]["personal_enabled"] = False
+        if change == "rotated_capability":
+            monkeypatch.setenv("CAO_MUSE_TOKEN", "replacement")
+            headers = {"X-Muse-Token": "replacement"}
+        configured.write_text(json.dumps(config))
+        calls.clear()
+        url = "/api/v1/personal/execution/runs/" + str(payload.request_id)
+        assert client.get(url, headers=headers).status_code == 403
+        assert (
+            client.post(
+                url + "/feedback",
+                headers=headers,
+                json={"request_id": str(uuid4()), "text": "修复测试"},
+            ).status_code
+            == 403
+        )
+        assert not calls
+
+
+def test_internal_id_cannot_be_reclaimed_as_muse_origin(configured, monkeypatch):
+    payload, _, _ = launch_p2(configured, monkeypatch)
+    with muse_client(monkeypatch) as client:
+        response = client.post(
+            "/api/v1/personal/execution/runs",
+            headers={"X-Muse-Token": "muse-only"},
+            json=payload.model_dump(mode="json"),
+        )
+    assert response.status_code == 409
+
+
+def test_internal_http_cannot_set_muse_origin_via_query_parameter(
+    configured, monkeypatch
+):
+    config_p2(configured)
+    host_calls(monkeypatch)
+    monkeypatch.setenv("CAO_MUSE_TOKEN", "muse-only")
+    app = FastAPI()
+    app.include_router(ep.router)
+    app.include_router(p2.router)
+    payload = request().model_copy(
+        update={"model_profile": "fast", "prompt": "实现加法并运行测试"}
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/execution/runs",
+            params={"muse_capability": p2.muse_capability("muse-only")},
+            headers={"X-Collector-Token": "test-access"},
+            json=payload.model_dump(mode="json"),
+        )
+        assert response.status_code == 200
+        response = client.get(
+            "/api/v1/personal/execution/runs/" + str(payload.request_id),
+            headers={"X-Muse-Token": "muse-only"},
+        )
+        assert response.status_code == 403

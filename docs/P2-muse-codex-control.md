@@ -6,7 +6,7 @@
 
 2026-10-07 使用应用自带 Codex app-server 的 initialize / model/list 实际查询，得到 gpt-6-luna、gpt-6.1-sol、gpt-6-astra 等，均支持 low / medium / high。固定 Superset 源码的 curated catalog 同样包含这三个模型。配置映射 fast=gpt-6-luna，balanced=gpt-6.1-sol，strong=gpt-6-astra；这是本机已验证配置，账户/Host 变化需要重新探测，不能猜测其他账户可用性。
 
-CAO_SUPERSET_CONFIG 在已有 manifest/bindings 之外增加 model_profiles 和 p2_agent_id。p2_agent_id 指向独立 Codex preset（presetId=codex），args 必须严格等于 `apps/server/p2_policy.py` 中的 P2_ARGS：workspace-write、never、禁网络、无额外写目录；只启用并批准 cao-sentinel 的四个执行事件报告工具（report_task_started / progress / test_result / finished），关闭其他 MCP、Apps 与本机已安装插件工具，argv prompt，不能借用旧 --yolo 或 bypass 配置。模型名只由本地管理员配置，API 请求只接受 profile 白名单与三档 effort。实际解析模型写入 execution 展示记录。已有会话暂不热切换模型，Muse 设置作用于下一项任务，避免虚假声称已切换。
+CAO_SUPERSET_CONFIG 在已有 manifest/bindings 之外增加 model_profiles 和 p2_agent_id。p2_agent_id 指向独立 Codex preset（presetId=codex），args 必须严格等于 `apps/server/p2_policy.py` 中的 P2_ARGS：workspace-write、never、禁网络、无额外写目录；只启用并批准 cao-sentinel 的四个执行事件报告工具（report_task_started / progress / test_result / finished），启动前验证有效 MCP 配置和完整 MCP 工具集，整体关闭插件和 Apps，另行核对模型可见的内置工具集，argv prompt，不能借用旧 --yolo 或 bypass 配置。模型名只由本地管理员配置，API 请求只接受 profile 白名单与三档 effort。实际解析模型写入 execution 展示记录。已有会话暂不热切换模型，Muse 设置作用于下一项任务，避免虚假声称已切换。
 
 ## 保护接口
 
@@ -61,3 +61,19 @@ Muse PR #3 (`bc1af1c`) 与 CAO PR #30 (`4e08796`) 已整合到两个 P2 子分�
 同一执行收到整数参数反馈后，实际实现 square 并拒绝 bool/非整数，中央报告 5 passed / 0 failed，独立 unittest 同样 5 项通过（包含仓库本轮添加的标题处理测试）。测试仓库 HEAD 仍 fec4047，没有自动提交。语音继续执行和测试结果播报未在这四轮日志中出现，不冒称完成六轮；对应接口流程已在上节真实本机 9 项测试闭环验证，保留为板端覆盖限制。
 
 四轮 STT 为 0.494–0.645 秒。按键至首音分别 27.985 / 14.533 / 15.310 / 13.097 秒，包含录音、3 秒静音等待和 USB 导出；USB 接收完成至首音分别 11.969 / 6.454 / 3.839 / 4.398 秒。进度回答分五段播放约 17.8 秒，仍有精简播报空间；本轮未追加延迟优化功能。启动初期绑定尚未建立可短暂显示 Unknown，后续实际 Running / Waiting；不把 Waiting 当正式完成。
+
+
+## 2026-10-08 Review 修订
+
+查询/反馈每次校验当前 personal_enabled 的项目+仓库配对，以及服务端记录的 Muse capability SHA-256 归属。内部 M9/P2 执行、旧版无归属记录、撤销配对及更换 capability 的记录均拒绝；不迁移旧会话或自动重放。发送反馈前再次核对授权与受限 preset。新策略标记 tool_policy_version=2，旧策略不能继续反馈。
+
+受控 preset 的 command 必须等于管理员配置的 p2_guarded_command。安装 `python3 deployments/superset/install_p2_codex.py PRIVATE_DIR --binary ABSOLUTE_CODEX_CLI` 后，将该目录中的 codex 绝对路径同时配置到 preset 和 p2_guarded_command。安装只写专用目录，不修改用户 Codex 配置。每次启动必须完整匹配 P2_ARGS，仅允许 Superset 追加 model/effort 和单个任务 prompt。
+
+新启动器先用本机 CLI 向 loopback 模拟 Responses 服务发送一次工具清单请求：无模型推理，不发送到云端，不保存请求正文，仅提取外层工具和 code-mode 描述中的嵌套工具名。工具清单、压缩格式、模型缓存或接口未知即拒绝。批准的内置工具为 exec/wait、受沙箱限制的 apply_patch/exec_command/write_stdin/view_image、目标管理、有限 MCP resource 查询、用户输入及 clock；完整集合在 p2_builtin_audit.ALLOWED。它们是代码执行基础工具，不能说“总共只有四个工具”。此外，app-server config/read 校验当前工作目录的有效配置，未知启用 MCP 在工具初始化前拒绝；mcpServerStatus/list 分页全集必须严格等于四个报告工具。整体禁用 plugins/remote_plugin/apps/web，agents.enabled=false 关闭模型 metadata 驱动的 v2 协作工具；仅 features.multi_agent=false 在本机版本不够。禁用共享 daemon 并移除父桌面 CODEX_* session/permission/API-key 环境覆盖。
+
+本机实际 MCP 工具全集为 cao-sentinel/report_task_started、report_task_progress、report_test_result、report_task_finished。实际 RPC 尝试 get_project_context、node_repl/js、未知 server/write 均拒绝；注入新 MCP server 使启动预检拒绝。实际模型请求不再包含 collaboration/spawn_agent/send_message 等工具；清单只含上述批准内置工具。源码/配置被同用户恶意修改不属于该保证；不扩大到业务仓库。
+
+P2 独立 POST/runs 现在拒绝空白、启动口令及缺少操作的任务（中文/英文代码动作白名单是输入保护，不是完整语义理解）。原始启动 prompt，包括从语音转录得到的任务文本，会保存在 CAO executions.request_json 与 result_json，以及真实 Codex 会话/argv 中；它不是录音文件，但仍属敏感任务内容。反馈正文只发送到已有 Codex 会话，CAO execution_feedback 表仅存哈希/元数据；Codex 自身会话记录可能保留反馈。Muse 不保存录音/转录日志的口径不能等同于“整个系统不持久化任务文本”。当前没有自动保留期清理，应仅对授权测试内容使用，清理由操作者按数据保留策略执行。
+
+
+修订后的最终策略真机 Host 本机闭环：execution `0770a3b2-0b79-4c4c-8286-8b28e8b70be8`，fast / gpt-6-luna / low；实际同一 harness 启动 3 tests → 整数约束反馈 6 tests → 继续执行补边界 10 tests。中央 test.result 与独立 unittest 均 10 passed / 0 failed，fixture HEAD 仍 fec4047，无自动提交。受限启动器的模型可见内置工具审计与 MCP 清单检查均实际通过。新增源码回归最终为 361 Python / 40 前端测试；没有重新做板端六轮验收。

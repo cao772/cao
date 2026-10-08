@@ -7,6 +7,7 @@ P2_TOOLS = [
     "report_task_finished",
 ]
 P2_ARGS = [
+    "--no-daemon",
     "--sandbox",
     "workspace-write",
     "--ask-for-approval",
@@ -26,21 +27,20 @@ P2_ARGS = [
     "-c",
     "apps._default.enabled=false",
 ]
-# Explicitly disable the installed plugins in this deployment. Re-probe a changed
-# account configuration; no browser/native-app or app-task automation in P2.
-P2_DISABLED_PLUGINS = [
-    "documents@openai-primary-runtime",
-    "presentations@openai-primary-runtime",
-    "spreadsheets@openai-primary-runtime",
-    "pdf@openai-primary-runtime",
-    "template-creator@openai-primary-runtime",
-    "visualize@openai-bundled",
-    "codex-app-tools@openai-bundled",
-    "browser@openai-bundled",
-    "unified-computer-use@openai-bundled",
-    "chrome@openai-bundled",
-    "computer-use@openai-bundled",
-    "code-review@openai-bundled",
+# Disable whole tool sources, including plugins installed after this deployment.
+P2_ARGS += [
+    "-c",
+    "features.plugins=false",
+    "-c",
+    "features.remote_plugin=false",
+    "-c",
+    "features.apps=false",
+    "-c",
+    "features.multi_agent=false",
+    "-c",
+    "features.multi_agent_v2=false",
+    "-c",
+    "agents.enabled=false",
+    "-c",
+    'web_search="disabled"',
 ]
-for plugin in P2_DISABLED_PLUGINS:
-    P2_ARGS.extend(["-c", f'plugins."{plugin}".enabled=false'])

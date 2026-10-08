@@ -129,10 +129,15 @@ def runs(x_collector_token: str | None = Header(default=None)):
 
 @router.post("/runs")
 def launch(payload: Launch, x_collector_token: str | None = Header(default=None)):
+    return launch_execution(payload, x_collector_token)
+
+
+def launch_execution(payload: Launch, x_collector_token: str | None, *, muse_capability: str | None = None):
     authorize(x_collector_token)
     if payload.model_profile:
-        from execution_p2 import check_scope
+        from execution_p2 import check_scope, check_task
         check_scope(payload.prompt)
+        check_task(payload.prompt)
     config = settings()
     binding = next((item for item in config.get("bindings", [])
                     if item["project_id"] == payload.project_id
@@ -145,6 +150,7 @@ def launch(payload: Launch, x_collector_token: str | None = Header(default=None)
                      workspace_id=str(payload.request_id), session_id=None,
                      status="creating_workspace", created_at=main.now_utc(),
                      updated_at=main.now_utc(), formal_completion=False, p2=bool(payload.model_profile))
+    execution["muse_capability"] = muse_capability
     with db() as connection:
         try:
             connection.execute("INSERT INTO executions VALUES (?,?,?)",
@@ -153,7 +159,7 @@ def launch(payload: Launch, x_collector_token: str | None = Header(default=None)
         except sqlite3.IntegrityError:
             row = connection.execute("SELECT request_json,result_json FROM executions WHERE id=?",
                                      (execution["id"],)).fetchone()
-            if json.loads(row[0]) != request:
+            if json.loads(row[0]) != request or json.loads(row[1]).get("muse_capability") != muse_capability:
                 raise HTTPException(409, "同一请求 ID 不能用于不同任务") from None
             return json.loads(row[1])
         try:

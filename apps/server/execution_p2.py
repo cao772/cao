@@ -43,6 +43,44 @@ def check_scope(text):
         raise HTTPException(422, "P2 只允许隔离代码修改、测试与反馈，该请求超出范围")
 
 
+def check_task(text):
+    # Require a substantive task rather than whitespace/launch boilerplate.
+    task = re.sub(
+        r"(?:开始开发|启动开发任务|启动\s*codex|让\s*codex|请|谢谢|用快模型)",
+        "",
+        text,
+        flags=re.I,
+    ).strip(" ，。!?！?、")
+    task = re.sub(r"测试(?=项目)", "", task)
+    if len(task) < 3 or not re.search(
+        r"写|实现|修复|检查|测试|重构|更新|优化|新增|添加|排查|修改|分析|运行|\b(?:implement|fix|test|write|check|update|refactor|run|add|review|build)\b",
+        task,
+        re.I,
+    ):
+        raise HTTPException(422, "必须提供具体代码操作或测试任务")
+
+
+def muse_capability(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def require_muse_run(value, config, token):
+    pair = (value.get("project_id"), value.get("repository_id"))
+    allowed = {
+        (b.get("project_id"), b.get("repository_id"))
+        for b in config.get("bindings", [])
+        if b.get("personal_enabled")
+    }
+    if (
+        not value.get("p2")
+        or pair not in allowed
+        or not hmac.compare_digest(
+            value.get("muse_capability") or "", muse_capability(token)
+        )
+    ):
+        raise HTTPException(403, "该执行不属于当前 Muse 授权项目与仓库")
+
+
 def resolve_profile(config, profile, effort):
     mapping = config.get("model_profiles", {})
     model = mapping.get(profile)
@@ -61,6 +99,7 @@ def resolve_profile(config, profile, effort):
         or agent.get("promptArgs") not in ([], ["--"])
         or agent.get("promptTransport") != "argv"
         or os.path.basename(agent.get("command", "")) != "codex"
+        or agent.get("command") != config.get("p2_guarded_command")
     ):
         raise HTTPException(503, "P2 需要已验证的隔离 Codex 配置，拒绝宽权限启动")
     ep.require_compatible_host(ep.call(config, "health.check"))
@@ -74,7 +113,8 @@ def resolve_profile(config, profile, effort):
             "resolved_model": model,
             "model_profile": profile,
             "reasoning_effort": effort,
-            "policy": "isolated-no-network-v1",
+            "policy": "isolated-no-network-v2",
+            "tool_policy_version": 2,
         },
     }
 
@@ -168,13 +208,14 @@ class Feedback(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
-def feedback(execution_id: UUID, payload: Feedback, token):
+def feedback(execution_id: UUID, payload: Feedback, token, *, muse_token=None):
     ep.authorize(token)
     check_scope(payload.text)
     # Inspect validates current Host and fresh live binding before any write.
     execution = ep.inspect(execution_id, token)
     if (
         not execution.get("p2")
+        or execution.get("tool_policy_version") != 2
         or execution.get("status") not in {"running", "waiting"}
         or not execution.get("agent_session_id")
     ):
@@ -200,6 +241,11 @@ def feedback(execution_id: UUID, payload: Feedback, token):
         connection.commit()
         # Persist unknown BEFORE send; never replay after timeout/crash.
         send_config = ep.settings()
+        if muse_token is not None:
+            require_muse_run(execution, send_config, muse_token)
+        resolve_profile(
+            send_config, execution["model_profile"], execution["reasoning_effort"]
+        )
         if execution.get("provider_instance") != send_config.get(
             "organization_id", send_config["url"]
         ):
@@ -242,7 +288,7 @@ def personal_auth(request: Request, token):
         raise HTTPException(403, "Muse execution is loopback-only")
 
 
-def personal_run(execution_id):
+def personal_run(execution_id, token):
     with ep.db() as connection:
         row = connection.execute(
             "SELECT result_json FROM executions WHERE id=?", (str(execution_id),)
@@ -250,13 +296,7 @@ def personal_run(execution_id):
     if not row:
         raise HTTPException(404, "执行不存在")
     value = json.loads(row[0])
-    allowed = {
-        b["project_id"]
-        for b in ep.settings().get("bindings", [])
-        if b.get("personal_enabled")
-    }
-    if not value.get("p2") or value["project_id"] not in allowed:
-        raise HTTPException(403, "该执行不属于 Muse 授权项目")
+    require_muse_run(value, ep.settings(), token)
     return value
 
 
@@ -318,6 +358,7 @@ def personal_launch(
 ):
     personal_auth(request, x_muse_token)
     check_scope(payload.prompt)
+    check_task(payload.prompt)
     if not any(
         b.get("personal_enabled")
         and b["project_id"] == payload.project_id
@@ -331,7 +372,13 @@ def personal_launch(
     payload = payload.model_copy(
         update={"task_id": "P2-" + str(payload.request_id), "prompt": payload.prompt}
     )
-    return public(ep.launch(payload, ep.main.COLLECTOR_TOKEN))
+    return public(
+        ep.launch_execution(
+            payload,
+            ep.main.COLLECTOR_TOKEN,
+            muse_capability=muse_capability(x_muse_token),
+        )
+    )
 
 
 @router.get("/runs/{execution_id}")
@@ -341,7 +388,7 @@ def personal_inspect(
     x_muse_token: str | None = Header(default=None),
 ):
     personal_auth(request, x_muse_token)
-    personal_run(execution_id)
+    personal_run(execution_id, x_muse_token)
     return public(ep.inspect(execution_id, ep.main.COLLECTOR_TOKEN))
 
 
@@ -353,8 +400,10 @@ def personal_feedback(
     x_muse_token: str | None = Header(default=None),
 ):
     personal_auth(request, x_muse_token)
-    personal_run(execution_id)
-    return feedback(execution_id, payload, ep.main.COLLECTOR_TOKEN)
+    personal_run(execution_id, x_muse_token)
+    return feedback(
+        execution_id, payload, ep.main.COLLECTOR_TOKEN, muse_token=x_muse_token
+    )
 
 
 @ep.router.post("/runs/{execution_id}/feedback")
