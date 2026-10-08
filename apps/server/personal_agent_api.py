@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 import main
 
@@ -263,7 +263,19 @@ def open_loops(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
 
 
 @router.get("/attention")
-def attention(limit: int = Query(default=20, ge=1, le=50)) -> dict[str, Any]:
+def attention(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=50),
+    x_muse_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    # This new feed is sensitive; require the scoped Muse capability.
+    from execution_p2 import personal_auth
+
+    personal_auth(request, x_muse_token)
+    return attention_snapshot(limit)
+
+
+def attention_snapshot(limit: int = 20) -> dict[str, Any]:
     """Read-only current-state feed; not a push or delivery guarantee.
 
     Clients can deduplicate unresolved items using a stable ID.
