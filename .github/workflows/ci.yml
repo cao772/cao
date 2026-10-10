@@ -12,6 +12,7 @@ on:
       - cao
       - codex/superset-execution-plane
       - codex/personal-agent-all
+      - feature/p3-attention-feed
 
 jobs:
   test:

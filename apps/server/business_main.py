@@ -11,6 +11,7 @@ from model_config import router as model_config_router
 from node_status import router as node_status_router
 from people_identity import router as people_identity_router
 from personal_agent_api import router as personal_agent_router
+from wechat_notifications_api import router as wechat_notifications_router
 from people_store import resolve_contributors
 from portfolio_search import router as portfolio_search_router
 from platform_config import router as platform_router
@@ -59,6 +60,7 @@ app.include_router(agent_router)
 app.include_router(execution_router)
 app.include_router(personal_execution_router)
 app.include_router(personal_agent_router)
+app.include_router(wechat_notifications_router)
 app.include_router(project_intelligence_router)
 app.include_router(conversation_intelligence_router)
 app.include_router(portfolio_search_router)
