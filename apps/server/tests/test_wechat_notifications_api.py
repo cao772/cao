@@ -67,3 +67,17 @@ def test_auth_happens_before_reading_scope(monkeypatch):
     with pytest.raises(HTTPException) as error:
         api.wechat_notifications(req, 'dedicated-test-token' * 3)
     assert error.value.status_code == 403
+
+
+def test_non_ascii_and_execution_capabilities_rejected(monkeypatch):
+    token = 'read-only-token' * 3
+    monkeypatch.setenv('CAO_MUSE_WECHAT_TOKEN', token)
+    req = Request({'type': 'http', 'client': ('127.0.0.1', 1)})
+    for presented in ('中文', 'execution-token'):
+        with pytest.raises(HTTPException) as error:
+            api.wechat_notifications(req, presented)
+        assert error.value.status_code == 401
+    monkeypatch.setenv('CAO_MUSE_TOKEN', token)
+    with pytest.raises(HTTPException) as error:
+        api.wechat_notifications(req, token)
+    assert error.value.status_code == 401

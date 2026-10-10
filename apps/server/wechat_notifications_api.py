@@ -95,7 +95,8 @@ def summarize(conn, user, device, bindings, scope, health, now):
 def wechat_notifications(request: Request, x_muse_token: str | None = Header(default=None)):
     expected = os.getenv("CAO_MUSE_WECHAT_TOKEN", "")
     if (len(expected) < 32 or expected in {main.COLLECTOR_TOKEN, os.getenv("CAO_MUSE_TOKEN", "")}
-            or not x_muse_token or not hmac.compare_digest(expected, x_muse_token)):
+            or not expected.isascii() or not x_muse_token or not x_muse_token.isascii()
+            or not hmac.compare_digest(expected, x_muse_token)):
         raise HTTPException(401, "Read-only Muse WeChat capability required")
     allowed = {"127.0.0.1", "::1", "testclient"}
     bridge = os.getenv("CAO_MUSE_BRIDGE_CLIENT", "")
