@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -65,14 +66,33 @@ class WeChatConfigIn(BaseModel):
     bindings: list[GroupBinding] = Field(default_factory=list, max_length=100)
 
 
+def publish_muse_config(config: dict[str, Any]) -> None:
+    # Dedicated projection directory contains no collector or TraceMemo credentials.
+    directory = STATE_ROOT / "muse-readonly"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target = directory / "wechat-config.json"
+    temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+    projection = {"enabled": config["enabled"], "bindings": config["bindings"],
+                  "generated_at": datetime.now().astimezone().isoformat()}
+    temporary.write_text(json.dumps(projection, ensure_ascii=False))
+    os.chmod(temporary, 0o600)
+    temporary.replace(target)
+
+
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
-        return normalize_config({})
+        config = normalize_config({})
+        publish_muse_config(config)
+        return config
     try:
         raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return normalize_config({})
-    return normalize_config(raw)
+        config = normalize_config({})
+        publish_muse_config(config)
+        return config
+    config = normalize_config(raw)
+    publish_muse_config(config)
+    return config
 
 
 def save_config(raw: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +101,7 @@ def save_config(raw: dict[str, Any]) -> dict[str, Any]:
     tmp = CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(CONFIG_PATH)
+    publish_muse_config(normalized)
     return normalized
 
 
@@ -323,7 +344,24 @@ _collection_lock = threading.Lock()
 def collect_authorized_groups(config: dict[str, Any]) -> dict[str, Any]:
     # The scheduler and manual scan share cursor/seen files in this process.
     with _collection_lock:
-        return _collect_authorized_groups(config)
+        result = _collect_authorized_groups(config)
+        # A successful empty batch is fresh; failures invalidate availability immediately.
+        pairs = sorted({(b["project_id"], b["group_name"]) for b in config.get("bindings", [])})
+        digest = hashlib.sha256(json.dumps([USER_ID, DEVICE_ID, pairs], ensure_ascii=False).encode()).hexdigest()
+        available = bool(config.get("enabled") and pairs
+            and result.get("wechat", {}).get("available") is True
+            and result.get("failed") == 0 and not result.get("error")
+            and len(result.get("groups", [])) == len(config["bindings"]))
+        health = {"scope_id": digest, "status": "available" if available else "unavailable",
+                  "last_success_at": datetime.now().astimezone().isoformat() if available else None}
+        directory = STATE_ROOT / "muse-readonly"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target = directory / "wechat-muse-health.json"
+        temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+        temporary.write_text(json.dumps(health))
+        os.chmod(temporary, 0o600)
+        temporary.replace(target)
+        return result
 
 
 def _collect_authorized_groups(config: dict[str, Any]) -> dict[str, Any]:
