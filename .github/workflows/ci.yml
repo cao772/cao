@@ -13,6 +13,7 @@ on:
       - codex/superset-execution-plane
       - codex/personal-agent-all
       - feature/p3-attention-feed
+      - codex/p8-wechat-summary
 
 jobs:
   test:
