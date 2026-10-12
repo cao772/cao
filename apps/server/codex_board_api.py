@@ -9,7 +9,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 
 import httpx
@@ -224,6 +224,132 @@ def details(value, binding, live):
     }
 
 
+TASK_FIELDS = {
+    "execution_id",
+    "repository_id",
+    "title",
+    "state",
+    "phase",
+    "progress",
+    "files",
+    "tests_passed",
+    "tests_failed",
+    "test_observed_at",
+    "last_event_at",
+    "model_profile",
+    "reasoning_effort",
+    "source",
+    "feedback_allowed",
+    "formal_completion",
+}
+
+
+def desktop_snapshot(config, capability):
+    allowed = set(config.get("desktop_board_project_ids", []))
+    if not allowed:
+        return [], True, allowed
+    try:
+        path = Path(config["desktop_board_snapshot_path"])
+        if path.is_symlink() or path.stat().st_size > 512 * 1024:
+            raise ValueError("Invalid projection")
+        data = json.loads(path.read_text())
+        at = timestamp(data.get("observed_at"))
+        if (
+            not at
+            or (datetime.now(timezone.utc) - at).total_seconds() > 45
+            or data.get("schema_version") != 1
+            or data.get("muse_capability") != muse_capability(capability)
+            or set(data.get("registered_project_ids", [])) != allowed
+            or set(data)
+            != {
+                "schema_version",
+                "observed_at",
+                "muse_capability",
+                "registered_project_ids",
+                "projects",
+            }
+            or not isinstance(data["projects"], list)
+            or len(data["projects"]) > 50
+        ):
+            raise ValueError("Wrong source/scope/freshness")
+        output, seen = [], set()
+        for project in data["projects"]:
+            if (
+                set(project) != {"project_id", "alias", "tasks"}
+                or project["project_id"] not in allowed
+                or not isinstance(project["tasks"], list)
+                or len(project["tasks"]) > 5
+                or not safe_text(project["alias"], 24)
+            ):
+                raise ValueError("Invalid project")
+            tasks = []
+            for task in project["tasks"]:
+                if (
+                    set(task) != TASK_FIELDS
+                    or task["source"] != "codex_desktop"
+                    or task["feedback_allowed"] is not False
+                    or task["formal_completion"] is not False
+                    or task["state"]
+                    not in {
+                        "running",
+                        "needs_input",
+                        "ended_unverified",
+                        "failed",
+                        "unknown",
+                        "stale",
+                    }
+                    or task["repository_id"] != "desktop:" + project["project_id"]
+                ):
+                    raise ValueError("Invalid task")
+                UUID(task["execution_id"])
+                if task["execution_id"] in seen:
+                    raise ValueError("Duplicate task")
+                seen.add(task["execution_id"])
+                task = dict(task)
+                task["title"] = safe_text(task["title"]) or "Codex"
+                task["progress"] = safe_text(task["progress"])
+                if task["files"] is not None:
+                    if not isinstance(task["files"], list):
+                        raise ValueError("Invalid files")
+                    task["files"] = [
+                        p
+                        for p in task["files"][:3]
+                        if isinstance(p, str)
+                        and re.fullmatch(r"[A-Za-z0-9_./-]{1,64}", p)
+                        and not PurePosixPath(p).is_absolute()
+                        and ".." not in PurePosixPath(p).parts
+                        and safe_text(p)
+                    ]
+                for field in ("tests_passed", "tests_failed"):
+                    if task[field] is not None and (
+                        type(task[field]) is not int or not 0 <= task[field] <= 100000
+                    ):
+                        raise ValueError("Invalid test count")
+                for field in ("test_observed_at", "last_event_at"):
+                    if task[field] is not None and not timestamp(task[field]):
+                        raise ValueError("Invalid event timestamp")
+                if task["state"] == "running" and (
+                    not timestamp(task["last_event_at"])
+                    or (
+                        datetime.now(timezone.utc) - timestamp(task["last_event_at"])
+                    ).total_seconds()
+                    > 90
+                ):
+                    task["state"] = "stale"
+                tasks.append(task)
+            if tasks:
+                output.append(
+                    {
+                        "project_id": project["project_id"],
+                        "alias": safe_text(project["alias"], 24),
+                        "tasks": tasks,
+                    }
+                )
+        return output, True, allowed
+    except (OSError, ValueError, KeyError, TypeError):
+        return [], False, allowed
+
+
 @router.get("/codex-board")
 def board(request: Request, x_muse_token: str | None = Header(default=None)):
     # Separate read credential cannot call the P2 mutation endpoints.
@@ -256,13 +382,25 @@ def board(request: Request, x_muse_token: str | None = Header(default=None)):
             },
         )
         project["tasks"].append(details(v, b, live.get(v["workspace_id"])))
+    desktop, desktop_ready, desktop_registered = desktop_snapshot(config, execution_token)
+    for project in desktop:
+        if project["project_id"] not in projects and len(projects) < 50:
+            projects[project["project_id"]] = project
+    registered += len(
+        desktop_registered
+        - {
+            b.get("project_id")
+            for b in config.get("bindings", [])
+            if b.get("personal_enabled") or b.get("board_enabled")
+        }
+    )
     rank = {
         "needs_input": 0,
         "failed": 1,
         "running": 2,
         "ended_unverified": 3,
-        "unknown": 4,
-        "stale": 5,
+        "unknown": 3,
+        "stale": 4,
     }
     for project in projects.values():
         project["tasks"].sort(
@@ -275,10 +413,24 @@ def board(request: Request, x_muse_token: str | None = Header(default=None)):
                 ),
             )
         )
-    items = sorted(projects.values(), key=lambda p: rank[p["tasks"][0]["state"]])
+    items = sorted(
+        projects.values(),
+        key=lambda p: (
+            rank[p["tasks"][0]["state"]],
+            -(
+                timestamp(p["tasks"][0]["last_event_at"]).timestamp()
+                if timestamp(p["tasks"][0]["last_event_at"])
+                else 0
+            ),
+        ),
+    )
     return {
         "schema_version": 1,
-        "status": "available" if not workspaces or all(live.values()) else "stale",
+        "status": "unavailable"
+        if not desktop_ready
+        else "available"
+        if not workspaces or all(live.values())
+        else "stale",
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "projects": items,
         "coverage": {
